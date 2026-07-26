@@ -552,6 +552,735 @@ test_dco() {
   printf 'policy fixtures (dco): ok\n'
 }
 
+test_yaml() {
+  validator=$script_dir/check-community-yaml.rb
+
+  [ -x "$validator" ] ||
+    fail 'community YAML validator is missing or not executable'
+
+  "$validator" "$repository_root" ||
+    fail 'repository community YAML files were rejected'
+
+  fixture_root=$tmp_dir/yaml-fixture
+  mkdir -p "$fixture_root/.github/ISSUE_TEMPLATE"
+  printf '%s\n' \
+    'name: Minimal form' \
+    'description: A valid minimal issue form.' \
+    'body:' \
+    '  - type: input' \
+    '    id: summary' \
+    '    attributes:' \
+    '      label: Summary' \
+    >"$tmp_dir/valid-form.yml"
+  printf '%s\n' \
+    'blank_issues_enabled: false' \
+    'contact_links:' \
+    '  - name: Report a security vulnerability' \
+    '    url: https://github.com/EngramMesh/EngramMesh/security/advisories/new' \
+    '    about: Use private vulnerability reporting.' \
+    >"$tmp_dir/valid-config.yml"
+
+  reset_yaml_fixture() {
+    cp "$tmp_dir/valid-form.yml" \
+      "$fixture_root/.github/ISSUE_TEMPLATE/bug.yml"
+    cp "$tmp_dir/valid-form.yml" \
+      "$fixture_root/.github/ISSUE_TEMPLATE/feature.yml"
+    cp "$tmp_dir/valid-config.yml" \
+      "$fixture_root/.github/ISSUE_TEMPLATE/config.yml"
+  }
+
+  assert_yaml_rejected() {
+    fixture_name=$1
+    expected_diagnostic=$2
+    fixture_output=$tmp_dir/yaml-$fixture_name.out
+    validator_status=0
+    "$validator" "$fixture_root" >"$fixture_output" 2>&1 ||
+      validator_status=$?
+    rg -Fqx "$expected_diagnostic" "$fixture_output" ||
+      fail "$fixture_name did not report: $expected_diagnostic"
+    [ "$validator_status" -ne 0 ] ||
+      fail "$fixture_name was accepted"
+  }
+
+  reset_yaml_fixture
+  "$validator" "$fixture_root" ||
+    fail 'valid minimal community YAML fixture was rejected'
+
+  : >"$fixture_root/.github/ISSUE_TEMPLATE/bug.yml"
+  assert_yaml_rejected empty-root \
+    '.github/ISSUE_TEMPLATE/bug.yml: root must be a mapping'
+
+  reset_yaml_fixture
+  printf '%s\n' 'scalar root' \
+    >"$fixture_root/.github/ISSUE_TEMPLATE/bug.yml"
+  assert_yaml_rejected scalar-root \
+    '.github/ISSUE_TEMPLATE/bug.yml: root must be a mapping'
+
+  assert_bad_form() {
+    bad_form_name=$1
+    bad_form_diagnostic=$2
+    bad_form_content=$3
+    reset_yaml_fixture
+    printf '%s\n' "$bad_form_content" \
+      >"$fixture_root/.github/ISSUE_TEMPLATE/bug.yml"
+    assert_yaml_rejected "$bad_form_name" "$bad_form_diagnostic"
+  }
+
+  assert_bad_config() {
+    bad_config_name=$1
+    bad_config_diagnostic=$2
+    bad_config_content=$3
+    reset_yaml_fixture
+    printf '%s\n' "$bad_config_content" \
+      >"$fixture_root/.github/ISSUE_TEMPLATE/config.yml"
+    assert_yaml_rejected "$bad_config_name" "$bad_config_diagnostic"
+  }
+
+  assert_bad_form alias \
+    '.github/ISSUE_TEMPLATE/bug.yml: YAML aliases are not allowed' \
+    'name: &form_name Aliased form
+description: Invalid alias fixture.
+title: *form_name
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+  assert_bad_form unsafe-class \
+    '.github/ISSUE_TEMPLATE/bug.yml: invalid YAML' \
+    'name: !ruby/object:Object {}
+description: Unsafe class fixture.
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+  assert_bad_form malformed-yaml \
+    '.github/ISSUE_TEMPLATE/bug.yml: invalid YAML' \
+    'name: [unterminated
+description: Invalid YAML fixture.'
+
+  assert_bad_form false-root \
+    '.github/ISSUE_TEMPLATE/bug.yml: root must be a mapping' \
+    'false'
+  assert_bad_form number-root \
+    '.github/ISSUE_TEMPLATE/bug.yml: root must be a mapping' \
+    '42'
+  assert_bad_form sequence-root \
+    '.github/ISSUE_TEMPLATE/bug.yml: root must be a mapping' \
+    '- not
+- a
+- mapping'
+
+  assert_bad_form missing-name \
+    '.github/ISSUE_TEMPLATE/bug.yml: name must be a non-empty string' \
+    'description: Missing name fixture.
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+  assert_bad_form non-string-name \
+    '.github/ISSUE_TEMPLATE/bug.yml: name must be a non-empty string' \
+    'name: 7
+description: Invalid name fixture.
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+  assert_bad_form missing-description \
+    '.github/ISSUE_TEMPLATE/bug.yml: description must be a non-empty string' \
+    'name: Missing description
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+  assert_bad_form non-string-description \
+    '.github/ISSUE_TEMPLATE/bug.yml: description must be a non-empty string' \
+    'name: Invalid description
+description: false
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+
+  assert_bad_form empty-body \
+    '.github/ISSUE_TEMPLATE/bug.yml: body must be a non-empty sequence' \
+    'name: Empty body
+description: Invalid empty body fixture.
+body: []'
+  assert_bad_form markdown-only \
+    '.github/ISSUE_TEMPLATE/bug.yml: body must contain at least one non-Markdown item' \
+    'name: Markdown only
+description: Invalid Markdown-only fixture.
+body:
+  - type: markdown
+    attributes:
+      value: Read this.'
+  assert_bad_form unsupported-type \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].type is unsupported: mystery' \
+    'name: Unsupported type
+description: Invalid body type fixture.
+body:
+  - type: mystery
+    id: summary
+    attributes:
+      label: Summary'
+
+  assert_bad_form missing-id \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].id must match [a-zA-Z][a-zA-Z0-9_-]*' \
+    'name: Missing ID
+description: Invalid missing ID fixture.
+body:
+  - type: input
+    attributes:
+      label: Summary'
+  assert_bad_form invalid-id \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].id must match [a-zA-Z][a-zA-Z0-9_-]*' \
+    'name: Invalid ID
+description: Invalid ID fixture.
+body:
+  - type: input
+    id: 9-invalid
+    attributes:
+      label: Summary'
+  assert_bad_form duplicate-id \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[1].id duplicates body[0].id: summary' \
+    'name: Duplicate ID
+description: Invalid duplicate ID fixture.
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+  - type: textarea
+    id: summary
+    attributes:
+      label: Details'
+  assert_bad_form markdown-duplicate-id \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[1].id duplicates body[0].id: summary' \
+    'name: Markdown duplicate ID
+description: Markdown and input duplicate ID fixture.
+body:
+  - type: markdown
+    id: summary
+    attributes:
+      value: Read this.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+
+  assert_bad_form missing-attributes \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes must be a mapping' \
+    'name: Missing attributes
+description: Invalid missing attributes fixture.
+body:
+  - type: input
+    id: summary'
+  assert_bad_form markdown-empty-value \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.value must be a non-empty string' \
+    'name: Empty Markdown
+description: Invalid Markdown value fixture.
+body:
+  - type: markdown
+    attributes:
+      value: ""
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+
+  assert_bad_form input-empty-label \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.label must be a non-empty string' \
+    'name: Empty input label
+description: Invalid input label fixture.
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: ""'
+  assert_bad_form textarea-missing-label \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.label must be a non-empty string' \
+    'name: Missing textarea label
+description: Invalid textarea label fixture.
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      description: Details'
+  assert_bad_form dropdown-non-string-label \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.label must be a non-empty string' \
+    'name: Invalid dropdown label
+description: Invalid dropdown label fixture.
+body:
+  - type: dropdown
+    id: choice
+    attributes:
+      label: false
+      options:
+        - One'
+
+  assert_bad_form dropdown-empty-options \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.options must be a non-empty sequence' \
+    'name: Empty dropdown options
+description: Invalid dropdown options fixture.
+body:
+  - type: dropdown
+    id: choice
+    attributes:
+      label: Choice
+      options: []'
+  assert_bad_form dropdown-empty-option \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.options[0] must be a non-empty string' \
+    'name: Empty dropdown option
+description: Invalid dropdown option fixture.
+body:
+  - type: dropdown
+    id: choice
+    attributes:
+      label: Choice
+      options:
+        - ""'
+  assert_bad_form dropdown-duplicate-option \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.options[1] duplicates options[0]: One' \
+    'name: Duplicate dropdown option
+description: Invalid duplicate option fixture.
+body:
+  - type: dropdown
+    id: choice
+    attributes:
+      label: Choice
+      options:
+        - One
+        - One'
+  assert_bad_form dropdown-mapping-option \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.options[0] must be a non-empty string' \
+    'name: Mapping dropdown option
+description: Invalid mapping option fixture.
+body:
+  - type: dropdown
+    id: choice
+    attributes:
+      label: Choice
+      options:
+        - label: One'
+  assert_bad_form dropdown-non-boolean-multiple \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.multiple must be Boolean' \
+    'name: Invalid dropdown multiple
+description: Invalid dropdown multiple fixture.
+body:
+  - type: dropdown
+    id: choice
+    attributes:
+      label: Choice
+      options:
+        - One
+      multiple: "false"'
+
+  reset_yaml_fixture
+  printf '%s\n' \
+    'name: Zero default' \
+    'description: Valid zero dropdown default fixture.' \
+    'body:' \
+    '  - type: dropdown' \
+    '    id: choice' \
+    '    attributes:' \
+    '      label: Choice' \
+    '      options:' \
+    '        - One' \
+    '      default: 0' \
+    >"$fixture_root/.github/ISSUE_TEMPLATE/bug.yml"
+  "$validator" "$fixture_root" ||
+    fail 'valid dropdown default zero was rejected'
+
+  assert_bad_form dropdown-boolean-default \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.default must be a zero-based option index' \
+    'name: Boolean dropdown default
+description: Invalid Boolean dropdown default fixture.
+body:
+  - type: dropdown
+    id: choice
+    attributes:
+      label: Choice
+      options:
+        - One
+      default: false'
+  assert_bad_form dropdown-negative-default \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.default must be a zero-based option index' \
+    'name: Negative dropdown default
+description: Invalid negative dropdown default fixture.
+body:
+  - type: dropdown
+    id: choice
+    attributes:
+      label: Choice
+      options:
+        - One
+      default: -1'
+  assert_bad_form dropdown-out-of-range-default \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.default must be a zero-based option index' \
+    'name: Out of range dropdown default
+description: Invalid out of range dropdown default fixture.
+body:
+  - type: dropdown
+    id: choice
+    attributes:
+      label: Choice
+      options:
+        - One
+      default: 1'
+  assert_bad_form dropdown-none-default \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.default cannot be combined with a None or n/a option' \
+    'name: None dropdown default
+description: Invalid None option default fixture.
+body:
+  - type: dropdown
+    id: choice
+    attributes:
+      label: Choice
+      options:
+        - One
+        - nOnE
+      default: 0'
+  assert_bad_form dropdown-na-default \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.default cannot be combined with a None or n/a option' \
+    'name: N/A dropdown default
+description: Invalid n/a option default fixture.
+body:
+  - type: dropdown
+    id: choice
+    attributes:
+      label: Choice
+      options:
+        - One
+        - N/A
+      default: 0'
+  assert_bad_form dropdown-compound-default \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.default must be a zero-based option index' \
+    'name: Compound dropdown default
+description: Compound invalid dropdown default fixture.
+body:
+  - type: dropdown
+    id: choice
+    attributes:
+      label: Choice
+      options:
+        - One
+        - None
+      default: -1'
+  rg -Fqx \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.default cannot be combined with a None or n/a option' \
+    "$tmp_dir/yaml-dropdown-compound-default.out" ||
+    fail 'dropdown-compound-default did not preserve: default cannot be combined with a None or n/a option'
+
+  assert_bad_form checkbox-invalid-label \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.options[0].label must be a non-empty string' \
+    'name: Invalid checkbox label
+description: Invalid checkbox option label fixture.
+body:
+  - type: checkboxes
+    id: consent
+    attributes:
+      options:
+        - label: ""'
+  assert_bad_form checkbox-invalid-required \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.options[0].required must be Boolean' \
+    'name: Invalid checkbox required
+description: Invalid checkbox required fixture.
+body:
+  - type: checkboxes
+    id: consent
+    attributes:
+      options:
+        - label: I agree
+          required: "yes"'
+
+  assert_bad_form non-mapping-validations \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].validations must be a mapping' \
+    'name: Invalid validations
+description: Invalid validations fixture.
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+    validations:
+      - required'
+  assert_bad_form non-boolean-validation-required \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].validations.required must be Boolean' \
+    'name: Invalid required validation
+description: Invalid required validation fixture.
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+    validations:
+      required: "true"'
+
+  assert_bad_form unknown-root-key \
+    '.github/ISSUE_TEMPLATE/bug.yml: unknown root key: mystery' \
+    'name: Unknown root key
+description: Invalid unknown root key fixture.
+mystery: value
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+  assert_bad_form unknown-body-key \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0] has unknown key: mystery' \
+    'name: Unknown body key
+description: Invalid unknown body key fixture.
+body:
+  - type: input
+    id: summary
+    mystery: value
+    attributes:
+      label: Summary'
+  assert_bad_form unknown-attribute-key \
+    '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes has unknown key: mystery' \
+    'name: Unknown attribute key
+description: Invalid unknown attribute key fixture.
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      mystery: value'
+  assert_bad_form invalid-title-type \
+    '.github/ISSUE_TEMPLATE/bug.yml: title must be a string' \
+    'name: Invalid title
+description: Invalid title fixture.
+title: false
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+  assert_bad_form invalid-labels-type \
+    '.github/ISSUE_TEMPLATE/bug.yml: labels must be a sequence of non-empty strings' \
+    'name: Invalid labels
+description: Invalid labels fixture.
+labels: bug
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+  assert_bad_form invalid-assignees-type \
+    '.github/ISSUE_TEMPLATE/bug.yml: assignees must be a sequence of non-empty strings' \
+    'name: Invalid assignees
+description: Invalid assignees fixture.
+assignees:
+  - false
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+
+  assert_bad_form duplicate-root-key \
+    '.github/ISSUE_TEMPLATE/bug.yml: duplicate mapping key at $.name' \
+    'name: First name
+name: Second name
+description: Duplicate root key fixture.
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+  assert_bad_form duplicate-nested-key \
+    '.github/ISSUE_TEMPLATE/bug.yml: duplicate mapping key at $.body[0].attributes.label' \
+    'name: Duplicate nested key
+description: Duplicate nested key fixture.
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: First label
+      label: Second label'
+  assert_bad_form equivalent-scalar-key \
+    '.github/ISSUE_TEMPLATE/bug.yml: duplicate mapping key at $.TRUE' \
+    'true: first value
+TRUE: second value
+name: Equivalent scalar keys
+description: Equivalent scalar key fixture.
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+  reset_yaml_fixture
+  printf '%s\n' \
+    'true: Boolean key' \
+    '!ruby/string true: Explicit string key' \
+    'name: Distinct explicit string key' \
+    'description: Boolean and explicit string key fixture.' \
+    'body:' \
+    '  - type: input' \
+    '    id: summary' \
+    '    attributes:' \
+    '      label: Summary' \
+    >"$fixture_root/.github/ISSUE_TEMPLATE/bug.yml"
+  explicit_string_distinct_output=$tmp_dir/yaml-explicit-string-distinct.out
+  explicit_string_distinct_status=0
+  "$validator" "$fixture_root" \
+    >"$explicit_string_distinct_output" 2>&1 ||
+    explicit_string_distinct_status=$?
+  [ "$explicit_string_distinct_status" -ne 0 ] ||
+    fail 'Boolean and explicitly tagged string root keys bypassed the schema'
+  rg -Fqx \
+    '.github/ISSUE_TEMPLATE/bug.yml: unknown root key: true' \
+    "$explicit_string_distinct_output" ||
+    fail 'explicit string tag was not loaded distinctly from a Boolean key'
+  explicit_string_unknown_count=$(
+    rg -Fxc \
+      '.github/ISSUE_TEMPLATE/bug.yml: unknown root key: true' \
+      "$explicit_string_distinct_output"
+  )
+  [ "$explicit_string_unknown_count" -eq 2 ] ||
+    fail 'Boolean and explicitly tagged string keys did not remain distinct'
+  if rg -Fq 'duplicate mapping key' "$explicit_string_distinct_output"; then
+    fail 'explicit string tag was conflated with a Boolean key'
+  fi
+
+  assert_bad_form equivalent-explicit-string-key \
+    '.github/ISSUE_TEMPLATE/bug.yml: duplicate mapping key at $.true' \
+    '!str true: First string value
+!ruby/string true: Second string value
+name: Equivalent explicit string keys
+description: Equivalent explicit string key fixture.
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+  assert_bad_form nested-equivalent-explicit-string-key \
+    '.github/ISSUE_TEMPLATE/bug.yml: duplicate mapping key at $.body[0].attributes.mystery' \
+    'name: Nested explicit string keys
+description: Nested explicit string key fixture.
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      !str mystery: First string value
+      !ruby/string mystery: Second string value'
+  assert_bad_form equivalent-integer-key \
+    '.github/ISSUE_TEMPLATE/bug.yml: duplicate mapping key at $["1"]' \
+    '01: first value
+1: second value
+name: Equivalent integer keys
+description: Equivalent integer key fixture.
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+  assert_bad_form nested-equivalent-key \
+    '.github/ISSUE_TEMPLATE/bug.yml: duplicate mapping key at $.body[0].attributes.TRUE' \
+    'name: Nested equivalent keys
+description: Nested equivalent key fixture.
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      true: first value
+      TRUE: second value'
+  assert_bad_form composite-mapping-key \
+    '.github/ISSUE_TEMPLATE/bug.yml: unsupported non-scalar mapping key at $' \
+    '? [name, description]
+: unsupported key
+name: Composite key
+description: Composite mapping key fixture.
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary'
+
+  reset_yaml_fixture
+  printf '%s\n' \
+    'name: First name' \
+    'name: !ruby/object:Object {}' \
+    'description: AST gate fixture.' \
+    'body:' \
+    '  - type: input' \
+    '    id: summary' \
+    '    attributes:' \
+    '      label: Summary' \
+    >"$fixture_root/.github/ISSUE_TEMPLATE/bug.yml"
+  ast_gate_output=$tmp_dir/yaml-ast-gate.out
+  ast_gate_status=0
+  "$validator" "$fixture_root" >"$ast_gate_output" 2>&1 ||
+    ast_gate_status=$?
+  [ "$ast_gate_status" -ne 0 ] ||
+    fail 'AST duplicate-key gate fixture was accepted'
+  rg -Fqx \
+    '.github/ISSUE_TEMPLATE/bug.yml: duplicate mapping key at $.name' \
+    "$ast_gate_output" ||
+    fail 'AST duplicate-key gate did not report its duplicate'
+  if rg -Fq '.github/ISSUE_TEMPLATE/bug.yml: invalid YAML' \
+    "$ast_gate_output"; then
+    fail 'AST duplicate-key errors did not gate safe loading'
+  fi
+
+  assert_bad_config blank-issues-enabled \
+    '.github/ISSUE_TEMPLATE/config.yml: blank_issues_enabled must be false' \
+    'blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/EngramMesh/EngramMesh/security/advisories/new
+    about: Use private vulnerability reporting.'
+  assert_bad_config malformed-contact-link \
+    '.github/ISSUE_TEMPLATE/config.yml: contact_links[0].about must be a non-empty string' \
+    'blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/EngramMesh/EngramMesh/security/advisories/new'
+  assert_bad_config missing-advisory-url \
+    '.github/ISSUE_TEMPLATE/config.yml: contact_links must include https://github.com/EngramMesh/EngramMesh/security/advisories/new' \
+    'blank_issues_enabled: false
+contact_links:
+  - name: Ask a question
+    url: https://github.com/EngramMesh/EngramMesh/discussions
+    about: Ask the community.'
+
+  reset_yaml_fixture
+  printf '%s\n' \
+    'name: Multiple errors' \
+    'description: false' \
+    'mystery: value' \
+    'body: []' \
+    >"$fixture_root/.github/ISSUE_TEMPLATE/bug.yml"
+  multiple_errors_output=$tmp_dir/yaml-multiple-errors.out
+  multiple_errors_status=0
+  "$validator" "$fixture_root" >"$multiple_errors_output" 2>&1 ||
+    multiple_errors_status=$?
+  [ "$multiple_errors_status" -ne 0 ] ||
+    fail 'multiple invalid YAML fields were accepted'
+  for multiple_error in \
+    '.github/ISSUE_TEMPLATE/bug.yml: unknown root key: mystery' \
+    '.github/ISSUE_TEMPLATE/bug.yml: description must be a non-empty string' \
+    '.github/ISSUE_TEMPLATE/bug.yml: body must be a non-empty sequence'; do
+    rg -Fqx "$multiple_error" "$multiple_errors_output" ||
+      fail "multiple-error fixture did not preserve: $multiple_error"
+  done
+
+  reset_yaml_fixture
+  rm -f "$fixture_root/.github/ISSUE_TEMPLATE/config.yml"
+  assert_yaml_rejected unreadable-file \
+    '.github/ISSUE_TEMPLATE/config.yml: cannot read file'
+
+  printf 'policy fixtures (yaml): ok\n'
+}
+
 test_links() {
   validator=$script_dir/check-markdown-links.sh
   installer=$script_dir/install-policy-tools.sh
@@ -1173,8 +1902,11 @@ case ${1:-} in
   links)
     test_links
     ;;
+  yaml)
+    test_yaml
+    ;;
   *)
-    printf 'usage: %s {tools|dco|links}\n' "$0" >&2
+    printf 'usage: %s {tools|dco|links|yaml}\n' "$0" >&2
     exit 2
     ;;
 esac
