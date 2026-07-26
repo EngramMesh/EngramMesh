@@ -1,0 +1,72 @@
+name: Bug report
+description: Report a reproducible defect in EngramMesh.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a reproducible defect.
+
+        Do not report vulnerabilities here. Use [GitHub Private Vulnerability Reporting](https://github.com/EngramMesh/EngramMesh/security/advisories/new) or email s.bing@qq.com instead.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Provide the affected version, release identifier, or commit SHA.
+      placeholder: "e.g., commit abc1234"
+    validations:
+      required: true
+  - type: input
+    id: deployment-profile
+    attributes:
+      label: Deployment profile
+      description: Describe the deployment profile, environment, and relevant configuration.
+      placeholder: "e.g., local development, future self-hosted profile"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest reproducible sequence of steps.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: Explain what you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: Actual behavior
+      description: Explain what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and diagnostics
+      description: Paste relevant logs or diagnostics only after removing secrets, personal data, tokens, and other sensitive information.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: regression-status
+    attributes:
+      label: Regression status
+      description: Tell us whether this worked previously and, if known, the last working version or commit.
+      options:
+        - Regression: it worked previously
+        - Not a regression: it has not worked as expected
+        - Unknown
+    validations:
+      required: true

@@ -1,0 +1,72 @@
+name: Feature request
+description: Propose a user-centered improvement for EngramMesh.
+title: "feature: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for describing a user need.
+
+        Do not disclose vulnerabilities here. Use [GitHub Private Vulnerability Reporting](https://github.com/EngramMesh/EngramMesh/security/advisories/new) or email s.bing@qq.com instead.
+  - type: textarea
+    id: user-problem
+    attributes:
+      label: User problem
+      description: Who experiences the problem, and what prevents them from succeeding today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-outcome
+    attributes:
+      label: Proposed outcome
+      description: Describe the user-visible outcome and how success could be recognized.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe workarounds, alternative approaches, or why they are insufficient.
+    validations:
+      required: true
+  - type: textarea
+    id: architecture-impact
+    attributes:
+      label: Architecture impact
+      description: Identify affected architectural boundaries, components, ADRs, or RFCs. State "None known" if unknown.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility impact
+      description: Describe API, event, storage, configuration, migration, or user compatibility effects. State "None" if none are expected.
+    validations:
+      required: true
+  - type: textarea
+    id: security-privacy
+    attributes:
+      label: Security and privacy impact
+      description: Describe authorization, tenant isolation, secrets, personal-data, or other security and privacy effects. Do not include vulnerability details.
+    validations:
+      required: true
+  - type: textarea
+    id: testability
+    attributes:
+      label: Testability
+      description: Describe deterministic acceptance criteria, test evidence, or evaluation needed to validate the outcome.
+    validations:
+      required: true
+  - type: dropdown
+    id: willingness-to-contribute
+    attributes:
+      label: Willingness to contribute
+      description: Are you interested in helping with this work?
+      options:
+        - "Yes, I am willing to contribute"
+        - "I can help review or test"
+        - "No, I am not able to contribute"
+    validations:
+      required: true
