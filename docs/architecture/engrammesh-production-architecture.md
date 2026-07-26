@@ -1,6 +1,6 @@
 # EngramMesh 生产级架构设计
 
-- 状态：待最终复核
+- 状态：架构总纲已批准
 - 日期：2026-07-26
 - 仓库名：`engrammesh`
 - 开源许可证：Apache License 2.0
@@ -61,6 +61,10 @@ EngramMesh 采用 Cell-based 架构。
 
 控制平面不保存用户记忆明文，不直接执行 Agent 任务。租户创建时固定分配至一个 Regional Cell。
 
+每个 Cell 保存由 Control Plane 签名的不可变配置快照，包括租户路由、AgentSpec、Memory Policy、工具策略、模型能力、JWKS 和配置版本。任务启动时固定引用具体配置版本，运行中不得静默漂移。Cell 正常情况下至少每 15 分钟刷新安全策略；授权和撤销信息硬过期时间为 1 小时。
+
+Control Plane 不可用时，已接受的只读或纯推理任务可使用其固定版本继续运行最多 24 小时；新的租户、配置发布和跨 Cell 迁移停止。安全快照超过 1 小时后，新任务和所有高风险工具调用必须 fail closed；低风险任务只能使用已缓存且未撤销的能力。Control Plane 恢复后，Cell 先校验配置版本与撤销事件，再恢复正常接单。紧急凭据和工具撤销通过独立高优先级安全通道传播。
+
 ### 4.2 Regional Cell
 
 每个 Cell 包含：
@@ -81,7 +85,7 @@ EngramMesh 采用 Cell-based 架构。
 | 任务运行、暂停、重试、定时 | Temporal | Event History 是任务执行权威 |
 | Agent 定义与业务数据 | PostgreSQL | 使用版本化记录和审计事件 |
 | 认知记忆与证据 | PostgreSQL | 追加事件与版本，不原地覆盖历史 |
-| Agent 图状态转换 | LangGraph | 作为状态机和规划库，不成为平台级执行事实源 |
+| Agent 图状态转换 | PostgreSQL 状态快照 + Temporal 转换历史 | LangGraph 仅作为状态转换和规划引擎，不持有权威状态 |
 | 语义检索索引 | Qdrant | 可从记忆事件重建 |
 | 关系与因果图 | GraphStore 投影 | 默认使用 PostgreSQL 图关系表；Neo4j 是可选 Adapter；均可从记忆事件重建 |
 | 缓存、限流、短期通知 | Valkey | 不保存不可恢复的核心状态；通过 Adapter 兼容 Redis |
@@ -137,7 +141,7 @@ MVP 中，`control_api`、`agent_runtime` 和 `memory_engine` 是同一 Python �
 | 图投影 | GraphStore SPI；PostgreSQL 关系图为默认实现，Neo4j 为可选 Adapter |
 | 临时数据 | Valkey；通过兼容 Adapter 支持 Redis |
 | 对象存储 | S3 或 MinIO |
-| 模型网关 | LiteLLM Proxy 加 EngramMesh Provider Adapter |
+| 模型网关 | ModelGateway SPI；EngramMesh 原生 Provider Adapter 为默认实现，LiteLLM 为可选进程外 Adapter |
 | 工具协议 | MCP 加内部类型化 Tool API |
 | 身份 | OIDC；SaaS 接 WorkOS/Auth0，私有部署接 Keycloak |
 | 可观测性 | OpenTelemetry、Langfuse、Prometheus、Grafana、Loki |
@@ -170,6 +174,17 @@ MVP 中，`control_api`、`agent_runtime` 和 `memory_engine` 是同一 Python �
 - Memory Policy 和编码算法版本
 - 隐私级别、保留策略和加密信息
 - 当前状态与前一版本引用
+- 所有者主体、访问作用域、用途限制和 ACL 版本
+
+Memory ACL 是记忆事实源的一部分，访问作用域只能是：
+
+- `user_private`：仅所有者及其显式授权 Agent
+- `agent_private`：仅指定 Agent 和其受控子 Agent
+- `team_shared`：指定团队成员和 Agent
+- `org_shared`：租户内经过组织策略授权的主体
+- `system_public`：不含租户敏感信息的公开系统知识
+
+每条记忆记录 `owner_subject`、允许的读取/写入主体、用途限制、授权来源和撤销版本。召回必须同时满足租户、主体身份、Agent 授权、用途和作用域策略。派生、摘要、合并和巩固后的记忆权限取所有来源权限的交集，不能通过推断或合并扩大访问范围。授权撤销通过事件传播到 Qdrant、GraphStore、缓存和进行中的任务；无法确认授权新鲜度时，敏感记忆检索必须 fail closed。
 
 ### 8.3 生命周期
 
@@ -321,7 +336,9 @@ Model Gateway 不把不同模型假设为完全等价。每个模型记录：
 
 路由先匹配能力与数据策略，再优化成本和延迟。自动回退仅发生在能力等价且合规策略一致的模型之间。Prompt、模型参数、解析器和路由策略均版本化。
 
-模型密钥由 Vault/KMS 管理，LiteLLM 部署于受限网络中。服务通过短期内部身份调用网关，不持有上游供应商密钥。
+ModelGateway SPI 是核心稳定接口，负责能力查询、请求执行、流式事件、用量、错误分类和取消语义。EngramMesh 原生 Provider Adapter 是默认实现，不依赖商业网关即可运行全部核心功能。LiteLLM 仅作为可选进程外 Adapter；其升级、许可证或功能变化不得影响核心契约。
+
+模型密钥由 Vault/KMS 管理。所有 ModelGateway 实现部署于受限网络中，服务通过短期内部身份调用网关，不持有上游供应商密钥。每个 Adapter 必须通过同一套 Provider Contract Test，不能把供应商专属字段泄漏到 Agent Runtime。
 
 ## 14. 可观测性与 SRE
 
@@ -453,6 +470,21 @@ requirement_id
 - 发布产物必须关联测试报告、评测基线、已知风险、灰度范围和回滚版本。
 
 确定性门禁失败时禁止发布。概率性门禁失败时默认禁止发布，只能通过限时、限租户实验重新收集证据，不能直接替换生产基线。
+
+初始绝对质量下限为：
+
+- 跨租户访问、越权工具调用、不可追溯高置信记忆和删除遗漏：允许失败数为 0。
+- 记忆来源可追溯率：100%。
+- 将未验证推断提升为高置信事实的比例：不高于 0.5%。
+- 记忆提取 macro-F1：不低于 0.85。
+- 记忆召回 nDCG@10：不低于 0.80。
+- 无关记忆对最终答案产生可观察干扰的比例：不高于 5%。
+- 固定研究任务集成功率：不低于 80%。
+- 报告中可验证引用的证据支持精确率：不低于 95%。
+
+概率性评测按用户类型、语言、任务复杂度、记忆类型和模型提供商分层，每个主要场景至少包含 200 个独立样本；低频高风险场景使用穷举或生成式对抗测试补充。新旧版本使用同一冻结语料和配对样本比较，以分层 bootstrap 计算 95% 置信区间。绝对指标的置信区间下界必须达到质量下限；非劣化比较中，新旧差值置信区间下界必须高于对应负向边界。
+
+基线只能由 Eval Maintainer 在两次独立完整评测结果一致后更新。数据集、评分器、模型或任务分布发生实质变化时，必须执行新旧基线桥接实验，并通过公开 ADR 记录原因、影响和可比性。不得通过删除困难样本或改变评分器来规避回归。
 
 ## 17. 后续实施分期总纲
 
