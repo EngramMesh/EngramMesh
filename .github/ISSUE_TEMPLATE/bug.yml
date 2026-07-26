@@ -65,8 +65,8 @@ body:
       label: Regression status
       description: Tell us whether this worked previously and, if known, the last working version or commit.
       options:
-        - Regression: it worked previously
-        - Not a regression: it has not worked as expected
+        - "Regression: it worked previously"
+        - "Not a regression: it has not worked as expected"
         - Unknown
     validations:
       required: true
