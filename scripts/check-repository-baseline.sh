@@ -15,6 +15,7 @@ ROADMAP.md
 TRADEMARKS.md
 CHANGELOG.md
 THIRD_PARTY_NOTICES.md
+.gitignore
 docs/LICENSE
 docs/architecture/engrammesh-production-architecture.md
 docs/adr/README.md
@@ -42,6 +43,13 @@ if ! grep -q "git commit -s" CONTRIBUTING.md; then
   printf 'CONTRIBUTING.md does not enforce DCO sign-off\n' >&2
   exit 1
 fi
+
+for ignored_path in .superpowers/sdd/probe docs/superpowers/probe; do
+  if ! git check-ignore -- "$ignored_path" >/dev/null 2>&1; then
+    printf 'expected ignored local artifact path is not ignored: %s\n' "$ignored_path" >&2
+    exit 1
+  fi
+done
 
 if git ls-files -ci --exclude-standard | grep . >/dev/null 2>&1; then
   printf 'an ignored local artifact is tracked\n' >&2

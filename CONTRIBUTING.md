@@ -18,7 +18,7 @@ Every commit must include a [Developer Certificate of Origin (DCO) 1.1](https://
 Signed-off-by: Your Name <your.email@example.com>
 ```
 
-By signing off, you certify that you have the right to submit the contribution under the repository's Apache License 2.0 terms.
+By signing off, you certify that the contribution is your original work or that you otherwise have the right to submit it. Accepted contributions use the applicable repository license: Apache License 2.0 for code and CC BY 4.0 for documentation, unless explicitly stated otherwise.
 
 ## Commit and review expectations
 
