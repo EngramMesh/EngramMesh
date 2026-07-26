@@ -15,6 +15,7 @@ ROADMAP.md
 TRADEMARKS.md
 CHANGELOG.md
 THIRD_PARTY_NOTICES.md
+.gitattributes
 .gitignore
 docs/LICENSE
 docs/architecture/engrammesh-production-architecture.md
@@ -44,7 +45,13 @@ if ! grep -q "git commit -s" CONTRIBUTING.md; then
   exit 1
 fi
 
-for ignored_path in .superpowers/sdd/probe docs/superpowers/probe; do
+for ignored_path in \
+  .superpowers/sdd/probe \
+  .superpowers/specs/probe \
+  .superpowers/plans/probe \
+  docs/superpowers/probe \
+  docs/plans/probe
+do
   if ! git check-ignore -- "$ignored_path" >/dev/null 2>&1; then
     printf 'expected ignored local artifact path is not ignored: %s\n' "$ignored_path" >&2
     exit 1
