@@ -1,0 +1,9 @@
+* @EngramMesh/maintainers
+/.github/ @EngramMesh/maintainers
+/SECURITY.md @EngramMesh/maintainers
+/GOVERNANCE.md @EngramMesh/maintainers
+/LICENSE @EngramMesh/maintainers
+/NOTICE @EngramMesh/maintainers
+/docs/architecture/ @EngramMesh/maintainers
+/docs/adr/ @EngramMesh/maintainers
+/docs/rfcs/ @EngramMesh/maintainers
