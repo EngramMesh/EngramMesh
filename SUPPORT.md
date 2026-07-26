@@ -9,7 +9,7 @@ actual behavior, and relevant environment details.
 
 ## Security vulnerabilities
 
-Do not report vulnerabilities in public Issues or Discussions. Use private
-security reporting through GitHub Private Vulnerability Reporting, or email
+Do not report vulnerabilities in public Issues or Discussions. Use private security
+reporting through GitHub Private Vulnerability Reporting, or email
 [s.bing@qq.com](mailto:s.bing@qq.com). See [SECURITY.md](SECURITY.md) for the
 coordinated disclosure process.
