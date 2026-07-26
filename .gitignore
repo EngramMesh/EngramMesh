@@ -3,9 +3,10 @@
 **/.superpowers/
 docs/superpowers/
 **/docs/superpowers/
+docs/plans/
+**/docs/plans/
 
 # Keep project documentation under version control.
 !docs/architecture/
 !docs/adr/
 !docs/rfcs/
-!docs/plans/
