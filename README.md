@@ -2,6 +2,8 @@
 
 > Open-source cognitive memory and durable multi-agent runtime.
 
+[简体中文](README.zh-CN.md) | English
+
 ## Status
 
 Architecture approved; product implementation has not started.
