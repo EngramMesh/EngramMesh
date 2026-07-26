@@ -552,6 +552,617 @@ test_dco() {
   printf 'policy fixtures (dco): ok\n'
 }
 
+test_links() {
+  validator=$script_dir/check-markdown-links.sh
+  installer=$script_dir/install-policy-tools.sh
+
+  [ -x "$validator" ] ||
+    fail 'Markdown link validator is missing or not executable'
+
+  link_tool_dir=$tmp_dir/link-policy-tools
+  if ! lychee=$("$installer" install "$link_tool_dir" lychee); then
+    fail 'could not install the approved Lychee release'
+  fi
+  [ "$lychee" = "$link_tool_dir/bin/lychee" ] ||
+    fail 'Lychee installer returned an unexpected executable path'
+  [ -x "$lychee" ] ||
+    fail 'Lychee installer did not create an executable'
+
+  run_link_validator() {
+    run_link_repository=$1
+    shift
+    (
+      cd "$run_link_repository"
+      "$validator" "$@"
+    )
+  }
+
+  run_link_validator_with_tmp() {
+    run_link_repository=$1
+    run_link_tmp=$2
+    shift 2
+    (
+      cd "$run_link_repository"
+      TMPDIR=$run_link_tmp "$validator" "$@"
+    )
+  }
+
+  run_link_validator_with_tmp_c_locale() {
+    run_link_repository=$1
+    run_link_tmp=$2
+    shift 2
+    (
+      cd "$run_link_repository"
+      LC_ALL=C TMPDIR=$run_link_tmp "$validator" "$@"
+    )
+  }
+
+  run_link_validator_with_path() {
+    run_link_repository=$1
+    run_link_path=$2
+    run_link_real_git=$3
+    run_link_move_to=$4
+    shift 4
+    (
+      cd "$run_link_repository"
+      PATH=$run_link_path \
+        TASK4_REAL_GIT=$run_link_real_git \
+        TASK4_MOVE_TO=$run_link_move_to \
+        "$validator" "$@"
+    )
+  }
+
+  run_link_validator_with_dump() {
+    run_link_repository=$1
+    run_link_dump_kind=$2
+    run_link_dump_lychee=$3
+    (
+      cd "$run_link_repository"
+      TASK4_DUMP_KIND=$run_link_dump_kind \
+        "$validator" --revision HEAD --lychee "$run_link_dump_lychee"
+    )
+  }
+
+  fixture_repo=$tmp_dir/link-fixture
+  mkdir -p "$fixture_repo/docs"
+  git -C "$fixture_repo" init --quiet --template="$tmp_dir/empty-template"
+  git -C "$fixture_repo" config user.name 'Fixture User'
+  git -C "$fixture_repo" config user.email 'fixture@example.com'
+  printf '# Target\n' >"$fixture_repo/docs/target.md"
+  printf '# Links\n\n[valid](target.md)\n' >"$fixture_repo/docs/guide.md"
+  git -C "$fixture_repo" add docs/guide.md docs/target.md
+  git -C "$fixture_repo" commit --quiet -m 'Valid inline link'
+
+  (
+    cd "$fixture_repo"
+    "$validator" --revision HEAD --lychee "$lychee"
+  ) || fail 'valid inline link was rejected'
+
+  immutable_revision_repo=$tmp_dir/immutable-revision-fixture
+  mkdir -p "$immutable_revision_repo/docs"
+  git -C "$immutable_revision_repo" init --quiet \
+    --template="$tmp_dir/empty-template"
+  git -C "$immutable_revision_repo" config user.name 'Fixture User'
+  git -C "$immutable_revision_repo" config user.email 'fixture@example.com'
+  printf '# Target\n' >"$immutable_revision_repo/docs/target.md"
+  printf '# Links\n\n[valid](target.md)\n' \
+    >"$immutable_revision_repo/docs/guide.md"
+  git -C "$immutable_revision_repo" add docs
+  git -C "$immutable_revision_repo" commit --quiet -m 'Valid moving revision'
+  immutable_revision_oid=$(
+    git -C "$immutable_revision_repo" rev-parse HEAD
+  )
+  printf '# Links\n\n[missing](missing.md)\n' \
+    >"$immutable_revision_repo/docs/guide.md"
+  git -C "$immutable_revision_repo" add docs/guide.md
+  git -C "$immutable_revision_repo" commit --quiet -m 'Moved revision'
+  moved_revision_oid=$(git -C "$immutable_revision_repo" rev-parse HEAD)
+  git -C "$immutable_revision_repo" branch moving "$immutable_revision_oid"
+
+  git_wrapper_dir=$tmp_dir/git-wrapper
+  mkdir -p "$git_wrapper_dir"
+  real_git=$(command -v git)
+  # shellcheck disable=SC2016
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'if [ "$#" -eq 3 ] && [ "$1" = rev-parse ] &&' \
+    '  [ "$2" = --verify ] && [ "$3" = "moving^{commit}" ]; then' \
+    '  resolved=$("$TASK4_REAL_GIT" "$@")' \
+    '  "$TASK4_REAL_GIT" update-ref refs/heads/moving "$TASK4_MOVE_TO"' \
+    '  printf "%s\n" "$resolved"' \
+    '  exit 0' \
+    'fi' \
+    'exec "$TASK4_REAL_GIT" "$@"' \
+    >"$git_wrapper_dir/git"
+  chmod +x "$git_wrapper_dir/git"
+
+  run_link_validator_with_path "$immutable_revision_repo" \
+    "$git_wrapper_dir:$PATH" "$real_git" "$moved_revision_oid" \
+    --revision moving --lychee "$lychee" ||
+    fail 'validator reused a mutable revision after resolving it'
+  [ "$(git -C "$immutable_revision_repo" rev-parse moving)" = \
+    "$moved_revision_oid" ] ||
+    fail 'mutable revision fixture did not move during validation'
+
+  invalid_revision_output=$tmp_dir/invalid-link-revision.out
+  capture_failure "$invalid_revision_output" \
+    run_link_validator "$fixture_repo" \
+    --revision not-a-commit --lychee "$lychee" ||
+    fail 'invalid link-check revision was accepted'
+  rg -q 'invalid commit revision: not-a-commit' "$invalid_revision_output" ||
+    fail 'invalid link-check revision did not report its value'
+
+  relative_lychee_output=$tmp_dir/relative-lychee.out
+  capture_failure "$relative_lychee_output" \
+    run_link_validator "$fixture_repo" \
+    --revision HEAD --lychee ./lychee ||
+    fail 'relative Lychee executable path was accepted'
+  rg -q 'Lychee path must be absolute' "$relative_lychee_output" ||
+    fail 'relative Lychee path did not report the absolute-path requirement'
+
+  nonexecutable_lychee=$tmp_dir/nonexecutable-lychee
+  : >"$nonexecutable_lychee"
+  nonexecutable_lychee_output=$tmp_dir/nonexecutable-lychee.out
+  capture_failure "$nonexecutable_lychee_output" \
+    run_link_validator "$fixture_repo" \
+    --revision HEAD --lychee "$nonexecutable_lychee" ||
+    fail 'nonexecutable absolute Lychee path was accepted'
+  rg -q 'Lychee path is not executable:' "$nonexecutable_lychee_output" ||
+    fail 'nonexecutable Lychee path did not report a clear diagnostic'
+
+  dump_lychee=$tmp_dir/dump-lychee
+  # shellcheck disable=SC2016
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'root_dir=' \
+    'dump=false' \
+    'while [ "$#" -gt 0 ]; do' \
+    '  case $1 in' \
+    '    --root-dir)' \
+    '      root_dir=$2' \
+    '      shift 2' \
+    '      ;;' \
+    '    --dump)' \
+    '      dump=true' \
+    '      shift' \
+    '      ;;' \
+    '    *)' \
+    '      shift' \
+    '      ;;' \
+    '  esac' \
+    'done' \
+    'if [ "$dump" = true ]; then' \
+    '  case $TASK4_DUMP_KIND in' \
+    '    invalid)' \
+    '      printf "file://%s/docs/invalid%%ZZ.md\n" "$root_dir"' \
+    '      ;;' \
+    '    invalid_utf8)' \
+    '      printf "file://%s/docs/invalid%%FF.md\n" "$root_dir"' \
+    '      ;;' \
+    '    nul)' \
+    '      printf "file://%s/docs/nul%%00.md\n" "$root_dir"' \
+    '      ;;' \
+    '    authority)' \
+    '      printf "file://example.com/path\n"' \
+    '      ;;' \
+    '  esac' \
+    'fi' \
+    >"$dump_lychee"
+  chmod +x "$dump_lychee"
+
+  invalid_file_url_output=$tmp_dir/invalid-file-url.out
+  capture_failure "$invalid_file_url_output" \
+    run_link_validator_with_dump "$fixture_repo" invalid "$dump_lychee" ||
+    fail 'invalid serialized file URL was accepted'
+  rg -q 'invalid file URL in Markdown:' "$invalid_file_url_output" ||
+    fail 'invalid serialized file URL did not report a clear diagnostic'
+
+  invalid_utf8_output=$tmp_dir/invalid-utf8-file-url.out
+  capture_failure "$invalid_utf8_output" \
+    run_link_validator_with_dump \
+    "$fixture_repo" invalid_utf8 "$dump_lychee" ||
+    fail 'non-UTF-8 file URL path was accepted'
+  rg -q 'file URL path is not valid UTF-8:' "$invalid_utf8_output" ||
+    fail 'non-UTF-8 file URL path did not report a clear diagnostic'
+
+  nul_file_url_output=$tmp_dir/nul-file-url.out
+  capture_failure "$nul_file_url_output" \
+    run_link_validator_with_dump "$fixture_repo" nul "$dump_lychee" ||
+    fail 'NUL-encoded file URL was accepted'
+  rg -q 'file URL contains a NUL byte:' "$nul_file_url_output" ||
+    fail 'NUL-encoded file URL did not report a clear diagnostic'
+
+  authority_file_url_output=$tmp_dir/authority-file-url.out
+  capture_failure "$authority_file_url_output" \
+    run_link_validator_with_dump "$fixture_repo" authority "$dump_lychee" ||
+    fail 'remote-authority file URL was accepted'
+  rg -q 'file URL authority is not allowed:' "$authority_file_url_output" ||
+    fail 'remote-authority file URL did not report a clear diagnostic'
+
+  inside_snapshot_output=$tmp_dir/inside-snapshot.out
+  capture_failure "$inside_snapshot_output" \
+    run_link_validator_with_tmp "$fixture_repo" "$fixture_repo" \
+    --revision HEAD --lychee "$lychee" ||
+    fail 'snapshot directory inside the repository was accepted'
+  rg -q 'snapshot directory must be outside the repository' \
+    "$inside_snapshot_output" ||
+    fail 'inside-repository snapshot did not report a clear diagnostic'
+  if find "$fixture_repo" -maxdepth 1 -type d \
+    -name 'engrammesh-links.*' -print | rg -q .; then
+    fail 'rejected inside-repository snapshot was not cleaned up'
+  fi
+
+  printf '\n[missing](missing.md)\n' >>"$fixture_repo/docs/guide.md"
+  git -C "$fixture_repo" add docs/guide.md
+  git -C "$fixture_repo" commit --quiet -m 'Missing link target'
+  missing_output=$tmp_dir/missing-link.out
+  capture_failure "$missing_output" \
+    run_link_validator "$fixture_repo" \
+    --revision HEAD --lychee "$lychee" ||
+    fail 'missing tracked target was accepted'
+  rg -q 'File not found[.] Check if file exists and path is correct' \
+    "$missing_output" ||
+    fail 'missing tracked target did not report the Lychee missing-file diagnostic'
+
+  untracked_repo=$tmp_dir/untracked-target-fixture
+  mkdir -p "$untracked_repo/docs"
+  git -C "$untracked_repo" init --quiet --template="$tmp_dir/empty-template"
+  git -C "$untracked_repo" config user.name 'Fixture User'
+  git -C "$untracked_repo" config user.email 'fixture@example.com'
+  printf '# Links\n\n[untracked](untracked-target.md)\n' \
+    >"$untracked_repo/docs/guide.md"
+  printf '# Untracked target\n' >"$untracked_repo/docs/untracked-target.md"
+  git -C "$untracked_repo" add docs/guide.md
+  git -C "$untracked_repo" commit --quiet -m 'Untracked link target'
+  git -C "$untracked_repo" status --short --untracked-files=all |
+    rg -q 'docs/untracked-target[.]md' ||
+    fail 'untracked link target fixture was accidentally tracked'
+  untracked_output=$tmp_dir/untracked-target.out
+  capture_failure "$untracked_output" \
+    run_link_validator "$untracked_repo" \
+    --revision HEAD --lychee "$lychee" ||
+    fail 'existing but untracked link target was accepted'
+  rg -q 'File not found[.] Check if file exists and path is correct' \
+    "$untracked_output" ||
+    fail 'untracked link target did not report the missing-file diagnostic'
+
+  ignored_repo=$tmp_dir/ignored-target-fixture
+  mkdir -p "$ignored_repo/docs"
+  git -C "$ignored_repo" init --quiet --template="$tmp_dir/empty-template"
+  git -C "$ignored_repo" config user.name 'Fixture User'
+  git -C "$ignored_repo" config user.email 'fixture@example.com'
+  printf 'docs/ignored-target.md\n' >"$ignored_repo/.gitignore"
+  printf '# Links\n\n[ignored](ignored-target.md)\n' \
+    >"$ignored_repo/docs/guide.md"
+  printf '# Ignored target\n' >"$ignored_repo/docs/ignored-target.md"
+  git -C "$ignored_repo" add .gitignore docs/guide.md
+  git -C "$ignored_repo" commit --quiet -m 'Ignored link target'
+  git -C "$ignored_repo" check-ignore -q docs/ignored-target.md ||
+    fail 'ignored link target fixture was not ignored'
+  ignored_output=$tmp_dir/ignored-target.out
+  capture_failure "$ignored_output" \
+    run_link_validator "$ignored_repo" \
+    --revision HEAD --lychee "$lychee" ||
+    fail 'existing but ignored link target was accepted'
+  rg -q 'File not found[.] Check if file exists and path is correct' \
+    "$ignored_output" ||
+    fail 'ignored link target did not report the missing-file diagnostic'
+
+  encoded_prefix_tmp_dir=$tmp_dir/snapshot\ space\ %\ ü
+  mkdir -p "$encoded_prefix_tmp_dir"
+  encoded_prefix_repo=$tmp_dir/encoded-prefix-fixture
+  mkdir -p "$encoded_prefix_repo/docs"
+  git -C "$encoded_prefix_repo" init --quiet \
+    --template="$tmp_dir/empty-template"
+  git -C "$encoded_prefix_repo" config user.name 'Fixture User'
+  git -C "$encoded_prefix_repo" config user.email 'fixture@example.com'
+  printf '# Encoded prefix target\n' \
+    >"$encoded_prefix_repo/docs/space % ü.md"
+  printf '# Links\n\n[target](space%%20%%25%%20%%C3%%BC.md)\n' \
+    >"$encoded_prefix_repo/docs/guide.md"
+  git -C "$encoded_prefix_repo" add docs
+  git -C "$encoded_prefix_repo" commit --quiet \
+    -m 'Encoded snapshot prefix characters'
+  run_link_validator_with_tmp_c_locale \
+    "$encoded_prefix_repo" "$encoded_prefix_tmp_dir" \
+    --revision HEAD --lychee "$lychee" ||
+    fail 'valid non-ASCII snapshot prefix was rejected under LC_ALL=C'
+
+  escape_tmp_dir=$tmp_dir/escape-snapshots
+  mkdir -p "$escape_tmp_dir"
+  printf '# Outside snapshot\n' >"$escape_tmp_dir/outside.md"
+
+  plain_escape_repo=$tmp_dir/plain-escape-fixture
+  mkdir -p "$plain_escape_repo/docs"
+  git -C "$plain_escape_repo" init --quiet --template="$tmp_dir/empty-template"
+  git -C "$plain_escape_repo" config user.name 'Fixture User'
+  git -C "$plain_escape_repo" config user.email 'fixture@example.com'
+  printf '# Links\n\n[escape](../../outside.md)\n' \
+    >"$plain_escape_repo/docs/guide.md"
+  git -C "$plain_escape_repo" add docs/guide.md
+  git -C "$plain_escape_repo" commit --quiet -m 'Parent-directory escape'
+  plain_escape_output=$tmp_dir/plain-escape.out
+  capture_failure "$plain_escape_output" \
+    run_link_validator_with_tmp "$plain_escape_repo" "$escape_tmp_dir" \
+    --revision HEAD --lychee "$lychee" ||
+    fail '../ link target escape was accepted'
+  rg -q 'link target escapes snapshot: .*outside[.]md' \
+    "$plain_escape_output" ||
+    fail '../ link target escape did not report the escaped target'
+
+  encoded_escape_repo=$tmp_dir/encoded-escape-fixture
+  mkdir -p "$encoded_escape_repo/docs"
+  git -C "$encoded_escape_repo" init --quiet \
+    --template="$tmp_dir/empty-template"
+  git -C "$encoded_escape_repo" config user.name 'Fixture User'
+  git -C "$encoded_escape_repo" config user.email 'fixture@example.com'
+  printf '# Links\n\n[escape](%%2e%%2e/%%2e%%2e/outside.md)\n' \
+    >"$encoded_escape_repo/docs/guide.md"
+  git -C "$encoded_escape_repo" add docs/guide.md
+  git -C "$encoded_escape_repo" commit --quiet \
+    -m 'Percent-encoded parent-directory escape'
+  encoded_escape_output=$tmp_dir/encoded-escape.out
+  capture_failure "$encoded_escape_output" \
+    run_link_validator_with_tmp "$encoded_escape_repo" "$escape_tmp_dir" \
+    --revision HEAD --lychee "$lychee" ||
+    fail 'percent-encoded link target escape was accepted'
+  rg -q 'link target escapes snapshot: .*outside[.]md' \
+    "$encoded_escape_output" ||
+    fail 'percent-encoded escape did not report the escaped target'
+
+  encoded_separator_repo=$tmp_dir/encoded-separator-fixture
+  mkdir -p "$encoded_separator_repo/docs"
+  git -C "$encoded_separator_repo" init --quiet \
+    --template="$tmp_dir/empty-template"
+  git -C "$encoded_separator_repo" config user.name 'Fixture User'
+  git -C "$encoded_separator_repo" config user.email 'fixture@example.com'
+  printf '# Links\n\n[escape](%%2e%%2e%%2f%%2e%%2e%%2foutside.md)\n' \
+    >"$encoded_separator_repo/docs/guide.md"
+  git -C "$encoded_separator_repo" add docs/guide.md
+  git -C "$encoded_separator_repo" commit --quiet \
+    -m 'Percent-encoded separator escape'
+  encoded_separator_output=$tmp_dir/encoded-separator.out
+  capture_failure "$encoded_separator_output" \
+    run_link_validator_with_tmp "$encoded_separator_repo" "$escape_tmp_dir" \
+    --revision HEAD --lychee "$lychee" ||
+    fail 'percent-encoded separator escape was accepted'
+  rg -q 'link target escapes snapshot: .*outside[.]md' \
+    "$encoded_separator_output" ||
+    fail 'percent-encoded separator escape did not report the escaped target'
+
+  validate_link_fixture() {
+    description=$1
+    (
+      cd "$fixture_repo"
+      "$validator" --revision HEAD --lychee "$lychee"
+    ) || fail "$description"
+  }
+
+  printf '# Links\n\n[inline](target.md)\n' \
+    >"$fixture_repo/docs/guide.md"
+  git -C "$fixture_repo" add docs/guide.md
+  git -C "$fixture_repo" commit --quiet -m 'Restore valid inline link'
+
+  printf '# Reference target\n' \
+    >"$fixture_repo/docs/reference-target.md"
+  printf '\n[reference][tracked target]\n\n%s\n' \
+    '[tracked target]: reference-target.md' \
+    >>"$fixture_repo/docs/guide.md"
+  git -C "$fixture_repo" add docs
+  git -C "$fixture_repo" commit --quiet -m 'Reference-style link'
+  validate_link_fixture 'valid reference-style link was rejected'
+
+  printf '# Root target\n' >"$fixture_repo/docs/root-target.md"
+  printf '\n[root relative](/docs/root-target.md)\n' \
+    >>"$fixture_repo/docs/guide.md"
+  git -C "$fixture_repo" add docs
+  git -C "$fixture_repo" commit --quiet -m 'Root-relative link'
+  validate_link_fixture 'valid root-relative link was rejected'
+
+  printf '# Query target\n' >"$fixture_repo/docs/query-target.md"
+  printf '# Fragment target\n' >"$fixture_repo/docs/fragment-target.md"
+  printf '\n[query](query-target.md?view=full)\n%s\n' \
+    '[fragment](fragment-target.md#missing-anchor)' \
+    >>"$fixture_repo/docs/guide.md"
+  git -C "$fixture_repo" add docs
+  git -C "$fixture_repo" commit --quiet -m 'Query and fragment links'
+  validate_link_fixture 'valid query or unchecked fragment link was rejected'
+
+  mkdir -p "$fixture_repo/docs/space dir"
+  printf '# Space target\n' \
+    >"$fixture_repo/docs/space dir/space target.md"
+  printf '\n[space](<space dir/space target.md>)\n' \
+    >>"$fixture_repo/docs/guide.md"
+  git -C "$fixture_repo" add docs
+  git -C "$fixture_repo" commit --quiet -m 'Angle-bracket path with spaces'
+  validate_link_fixture 'valid angle-bracket path with spaces was rejected'
+
+  printf '\n\\[escaped](missing-escaped-target.md)\n' \
+    >>"$fixture_repo/docs/guide.md"
+  git -C "$fixture_repo" add docs/guide.md
+  git -C "$fixture_repo" commit --quiet -m 'Escaped link syntax'
+  validate_link_fixture 'escaped link syntax was treated as a link'
+
+  printf '%s\n' \
+    '' \
+    '````text' \
+    '```' \
+    '[fenced example](missing-fenced-target.md)' \
+    '```' \
+    '````' \
+    '' \
+    '~~~~text' \
+    '~~~' \
+    '[tilde example](missing-tilde-target.md)' \
+    '~~~' \
+    '~~~~' \
+    >>"$fixture_repo/docs/guide.md"
+  git -C "$fixture_repo" add docs/guide.md
+  git -C "$fixture_repo" commit --quiet -m 'Variable-length code fences'
+  validate_link_fixture 'link syntax in variable-length fences was checked'
+
+  printf '%s\n' \
+    '' \
+    '`[multiline inline code' \
+    'example](missing-inline-code-target.md)`' \
+    >>"$fixture_repo/docs/guide.md"
+  git -C "$fixture_repo" add docs/guide.md
+  git -C "$fixture_repo" commit --quiet -m 'Multiline inline code'
+  validate_link_fixture 'link syntax in multiline inline code was checked'
+
+  printf '# Nested target\n' >"$fixture_repo/docs/nested(target).md"
+  printf '# Encoded target\n' >"$fixture_repo/docs/encoded(target).md"
+  printf '\n[nested](nested(target).md)\n[encoded](encoded%%28target%%29.md)\n' \
+    >>"$fixture_repo/docs/guide.md"
+  git -C "$fixture_repo" add docs
+  git -C "$fixture_repo" commit --quiet -m 'Parentheses in link targets'
+  validate_link_fixture 'valid nested or percent-encoded parentheses were rejected'
+
+  printf '\n[protocol relative](//example.com/path)\n' \
+    >>"$fixture_repo/docs/guide.md"
+  git -C "$fixture_repo" add docs/guide.md
+  git -C "$fixture_repo" commit --quiet -m 'Protocol-relative link'
+  validate_link_fixture 'protocol-relative link was rejected in offline mode'
+  protocol_relative_output=$tmp_dir/protocol-relative.out
+  (
+    cd "$fixture_repo"
+    "$lychee" \
+      --offline \
+      --no-progress \
+      --include-fragments=none \
+      --root-dir "$fixture_repo" \
+      './**/*.md'
+  ) >"$protocol_relative_output"
+  rg -q '1 Excluded' "$protocol_relative_output" ||
+    fail 'protocol-relative link was not discovered as an offline exclusion'
+
+  printf '# CRLF target\n' >"$fixture_repo/docs/crlf-target.md"
+  printf '# CRLF\r\n\r\n[valid](crlf-target.md)\r\n' \
+    >"$fixture_repo/docs/crlf.md"
+  git -C "$fixture_repo" add docs
+  git -C "$fixture_repo" commit --quiet -m 'CRLF Markdown source'
+  stored_crlf_markdown=$tmp_dir/stored-crlf-markdown
+  git -C "$fixture_repo" show HEAD:docs/crlf.md >"$stored_crlf_markdown"
+  crlf_markdown_count=$(
+    LC_ALL=C tr -cd '\015' <"$stored_crlf_markdown" |
+      wc -c |
+      tr -d '[:space:]'
+  )
+  [ "$crlf_markdown_count" -gt 0 ] ||
+    fail 'CRLF Markdown fixture did not retain CR bytes'
+  validate_link_fixture 'valid link in CRLF Markdown was rejected'
+
+  mkdir -p "$fixture_repo/docs/tracked-directory"
+  printf 'Tracked directory fixture.\n' \
+    >"$fixture_repo/docs/tracked-directory/placeholder.txt"
+  printf '\n[directory](tracked-directory/)\n' \
+    >>"$fixture_repo/docs/guide.md"
+  git -C "$fixture_repo" add docs
+  git -C "$fixture_repo" commit --quiet -m 'Tracked directory target'
+  validate_link_fixture 'valid tracked directory target was rejected'
+
+  discovery_snapshot=$tmp_dir/link-discovery-snapshot
+  mkdir -p "$discovery_snapshot"
+  git -C "$fixture_repo" archive HEAD | tar -x -C "$discovery_snapshot"
+  discovery_snapshot=$(
+    CDPATH='' cd -- "$discovery_snapshot" && pwd -P
+  )
+  discovery_output=$tmp_dir/link-discovery.out
+  (
+    cd "$discovery_snapshot"
+    "$lychee" \
+      --offline \
+      --no-progress \
+      --include-fragments=none \
+      --root-dir "$discovery_snapshot" \
+      --dump \
+      './**/*.md'
+  ) >"$discovery_output"
+
+  for discovered_link in \
+    'docs/target.md' \
+    'docs/reference-target.md' \
+    'docs/root-target.md' \
+    'docs/query-target.md?view=full' \
+    'docs/fragment-target.md' \
+    'docs/space%20dir/space%20target.md' \
+    'docs/nested(target).md' \
+    'docs/encoded%28target%29.md' \
+    'docs/crlf-target.md' \
+    'docs/tracked-directory'; do
+    rg -Fq "$discovered_link" "$discovery_output" ||
+      fail "Lychee dump omitted valid CommonMark target: $discovered_link"
+  done
+  for ignored_link in \
+    'missing-escaped-target.md' \
+    'missing-fenced-target.md' \
+    'missing-tilde-target.md' \
+    'missing-inline-code-target.md'; do
+    if rg -Fq "$ignored_link" "$discovery_output"; then
+      fail "Lychee dump discovered ignored code syntax: $ignored_link"
+    fi
+  done
+
+  no_markdown_repo=$tmp_dir/no-markdown-fixture
+  mkdir -p "$no_markdown_repo"
+  git -C "$no_markdown_repo" init --quiet --template="$tmp_dir/empty-template"
+  git -C "$no_markdown_repo" config user.name 'Fixture User'
+  git -C "$no_markdown_repo" config user.email 'fixture@example.com'
+  printf 'No Markdown here.\n' >"$no_markdown_repo/tracked.txt"
+  git -C "$no_markdown_repo" add tracked.txt
+  git -C "$no_markdown_repo" commit --quiet -m 'No Markdown files'
+  no_markdown_output=$tmp_dir/no-markdown.out
+  capture_failure "$no_markdown_output" \
+    run_link_validator "$no_markdown_repo" \
+    --revision HEAD --lychee "$lychee" ||
+    fail 'revision without tracked Markdown was accepted'
+  rg -q 'no tracked Markdown files' "$no_markdown_output" ||
+    fail 'revision without tracked Markdown did not report a clear diagnostic'
+
+  relative_symlink_repo=$tmp_dir/relative-symlink-fixture
+  mkdir -p "$relative_symlink_repo/docs"
+  git -C "$relative_symlink_repo" init --quiet \
+    --template="$tmp_dir/empty-template"
+  git -C "$relative_symlink_repo" config user.name 'Fixture User'
+  git -C "$relative_symlink_repo" config user.email 'fixture@example.com'
+  printf '# Links\n' >"$relative_symlink_repo/docs/guide.md"
+  ln -s guide.md "$relative_symlink_repo/docs/relative-link.md"
+  git -C "$relative_symlink_repo" add docs/guide.md docs/relative-link.md
+  git -C "$relative_symlink_repo" commit --quiet -m 'Relative tracked symlink'
+  relative_symlink_output=$tmp_dir/relative-symlink.out
+  capture_failure "$relative_symlink_output" \
+    run_link_validator "$relative_symlink_repo" \
+    --revision HEAD --lychee "$lychee" ||
+    fail 'relative tracked symlink was accepted'
+  rg -q 'tracked symbolic link is not allowed: docs/relative-link[.]md' \
+    "$relative_symlink_output" ||
+    fail 'relative tracked symlink diagnostic omitted its path'
+
+  absolute_symlink_repo=$tmp_dir/absolute-symlink-fixture
+  mkdir -p "$absolute_symlink_repo/docs"
+  git -C "$absolute_symlink_repo" init --quiet \
+    --template="$tmp_dir/empty-template"
+  git -C "$absolute_symlink_repo" config user.name 'Fixture User'
+  git -C "$absolute_symlink_repo" config user.email 'fixture@example.com'
+  printf '# Links\n' >"$absolute_symlink_repo/docs/guide.md"
+  ln -s "$absolute_symlink_repo/docs/guide.md" \
+    "$absolute_symlink_repo/docs/absolute-link.md"
+  git -C "$absolute_symlink_repo" add docs/guide.md docs/absolute-link.md
+  git -C "$absolute_symlink_repo" commit --quiet -m 'Absolute tracked symlink'
+  absolute_symlink_output=$tmp_dir/absolute-symlink.out
+  capture_failure "$absolute_symlink_output" \
+    run_link_validator "$absolute_symlink_repo" \
+    --revision HEAD --lychee "$lychee" ||
+    fail 'absolute tracked symlink was accepted'
+  rg -q 'tracked symbolic link is not allowed: docs/absolute-link[.]md' \
+    "$absolute_symlink_output" ||
+    fail 'absolute tracked symlink diagnostic omitted its path'
+
+  printf 'policy fixtures (links): ok\n'
+}
+
 case ${1:-} in
   tools)
     test_tools
@@ -559,8 +1170,11 @@ case ${1:-} in
   dco)
     test_dco
     ;;
+  links)
+    test_links
+    ;;
   *)
-    printf 'usage: %s {tools|dco}\n' "$0" >&2
+    printf 'usage: %s {tools|dco|links}\n' "$0" >&2
     exit 2
     ;;
 esac
