@@ -195,6 +195,61 @@ def test_invalid_production_configuration_never_exposes_postgres_secret() -> Non
 
 
 @pytest.mark.parametrize(
+    ("password", "dsn"),
+    [
+        (
+            "nfkc-password-sentinel",
+            (
+                "postgresql://engrammesh:nfkc-password-sentinel"
+                "@postgres／nfkc-dsn-sentinel/engrammesh?sslmode=verify-full"
+            ),
+        ),
+        (
+            "ipv6-password-sentinel",
+            (
+                "postgresql://engrammesh:ipv6-password-sentinel"
+                "@[2001:db8::1/ipv6-dsn-sentinel?sslmode=verify-full"
+            ),
+        ),
+        (
+            "port-password-sentinel",
+            (
+                "postgresql://engrammesh:port-password-sentinel"
+                "@postgres:port-dsn-sentinel/engrammesh?sslmode=verify-full"
+            ),
+        ),
+    ],
+)
+def test_malformed_production_dsn_raises_only_sanitized_configuration_error(
+    password: str,
+    dsn: str,
+) -> None:
+    production: dict[str, object] = {
+        "environment": Environment.PRODUCTION,
+        "postgres": {"dsn": dsn},
+        "temporal": {
+            "namespace": "engrammesh-prod",
+            "task_queue": "engrammesh-prod",
+            "tls": True,
+        },
+    }
+
+    with pytest.raises(ConfigurationError) as raised:
+        AppSettings.model_validate(production)
+
+    assert raised.value.code == "invalid_postgres_dsn"
+    renderings = (
+        str(raised.value),
+        repr(raised.value),
+        repr(raised.value.errors()),
+        raised.value.json(),
+    )
+    for rendering in renderings:
+        assert password not in rendering
+        assert dsn not in rendering
+
+
+@pytest.mark.parametrize(
     "sslmode",
     [
         None,

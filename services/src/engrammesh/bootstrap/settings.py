@@ -3,7 +3,7 @@
 import json
 from enum import StrEnum
 from typing import Literal, Self
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import SplitResult, parse_qs, urlsplit
 
 from pydantic import BaseModel, ConfigDict, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,6 +30,16 @@ class ConfigurationError(RuntimeError):
     def json(self) -> str:
         """Serialize structured error details without preserving input values."""
         return json.dumps(self.errors(), separators=(",", ":"))
+
+
+def _parse_postgres_dsn(value: str) -> tuple[SplitResult, str | None] | None:
+    try:
+        dsn = urlsplit(value)
+        hostname = dsn.hostname
+        _ = dsn.port
+    except ValueError:
+        return None
+    return dsn, hostname
 
 
 class Environment(StrEnum):
@@ -111,8 +121,12 @@ class AppSettings(BaseSettings):
             msg = "production must not capture sensitive content in plaintext telemetry"
             raise ConfigurationError("plaintext_telemetry", msg)
 
-        dsn = urlsplit(self.postgres.dsn.get_secret_value())
-        if dsn.scheme not in {"postgres", "postgresql"} or dsn.hostname is None:
+        parsed_dsn = _parse_postgres_dsn(self.postgres.dsn.get_secret_value())
+        if parsed_dsn is None:
+            msg = "production requires a PostgreSQL DSN with an explicit host"
+            raise ConfigurationError("invalid_postgres_dsn", msg)
+        dsn, hostname = parsed_dsn
+        if dsn.scheme not in {"postgres", "postgresql"} or hostname is None:
             msg = "production requires a PostgreSQL DSN with an explicit host"
             raise ConfigurationError("invalid_postgres_dsn", msg)
         sslmodes = parse_qs(dsn.query, keep_blank_values=True).get("sslmode", [])
