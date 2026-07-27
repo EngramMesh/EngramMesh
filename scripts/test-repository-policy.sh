@@ -1840,6 +1840,30 @@ test_yaml() {
   [ -x "$validator" ] ||
     fail 'community YAML validator is missing or not executable'
 
+  psych_compatibility_shim=$tmp_dir/psych-one-positional-parse.rb
+  printf '%s\n' \
+    'require "yaml"' \
+    'module Psych' \
+    '  class << self' \
+    '    alias_method :repository_policy_original_parse, :parse' \
+    '    def parse(yaml, **keywords)' \
+    '      repository_policy_original_parse(yaml, **keywords)' \
+    '    end' \
+    '  end' \
+    'end' \
+    >"$psych_compatibility_shim"
+  psych_compatibility_output=$tmp_dir/psych-one-positional-parse.out
+  if ! ruby -r "$psych_compatibility_shim" \
+    "$validator" "$repository_root" \
+    >"$psych_compatibility_output" 2>&1; then
+    if grep -Fq 'wrong number of arguments' \
+      "$psych_compatibility_output"; then
+      fail 'community YAML validator passed a second positional argument to Psych.parse'
+    fi
+    cat "$psych_compatibility_output" >&2
+    fail 'community YAML validator failed under one-argument Psych.parse compatibility shim'
+  fi
+
   "$validator" "$repository_root" ||
     fail 'repository community YAML files were rejected'
 
