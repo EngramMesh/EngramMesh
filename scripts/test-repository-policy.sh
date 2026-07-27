@@ -552,6 +552,642 @@ test_dco() {
   printf 'policy fixtures (dco): ok\n'
 }
 
+test_history() {
+  validator=$script_dir/check-private-history.sh
+  fixture_repo=
+
+  fixture_git() {
+    git -C "$fixture_repo" \
+      -c core.hooksPath=/dev/null \
+      -c commit.gpgsign=false \
+      -c core.autocrlf=false \
+      -c core.eol=lf \
+      "$@"
+  }
+
+  new_history_fixture() {
+    fixture_repo=$tmp_dir/history-$1
+    mkdir -p "$fixture_repo"
+    fixture_git init --quiet --template="$tmp_dir/empty-template"
+    fixture_git config user.name 'Fixture User'
+    fixture_git config user.email 'fixture@example.com'
+  }
+
+  commit_history_file() {
+    path=$1
+    content=$2
+    mkdir -p "$fixture_repo/$(dirname -- "$path")"
+    printf '%s\n' "$content" >"$fixture_repo/$path"
+    fixture_git add "$path"
+    fixture_git commit --quiet -m "Add $path"
+  }
+
+  run_history_validator() {
+    (
+      cd "$fixture_repo"
+      "$validator" "$@"
+    )
+  }
+
+  new_history_fixture clean
+  commit_history_file README.md clean
+  run_history_validator HEAD ||
+    fail 'clean history was rejected'
+  commit_history_file .superpowers-public/spec.md public
+  commit_history_file docs/superpowers-public/notes.md public
+  commit_history_file docs/plans-public/roadmap.md public
+  commit_history_file .superpowers-public/秘密.md public
+  public_newline_path='docs/superpowers-public/public
+notes.md'
+  commit_history_file "$public_newline_path" public
+  run_history_validator HEAD ||
+    fail 'lookalike path components were rejected'
+  invalid_history_revision_output=$tmp_dir/invalid-history-revision.out
+  capture_failure "$invalid_history_revision_output" \
+    run_history_validator not-a-commit ||
+    fail 'invalid history revision was accepted'
+  rg -Fqx 'invalid commit revision: not-a-commit' \
+    "$invalid_history_revision_output" ||
+    fail 'invalid history revision did not report its revision'
+
+  new_history_fixture immutable-revision
+  commit_history_file README.md safe
+  immutable_safe_sha=$(fixture_git rev-parse HEAD)
+  commit_history_file .superpowers/private.md private
+  immutable_private_sha=$(fixture_git rev-parse HEAD)
+  fixture_git branch moving-ref "$immutable_safe_sha"
+  immutable_git_dir=$tmp_dir/immutable-git-bin
+  mkdir -p "$immutable_git_dir"
+  # shellcheck disable=SC2016 # Variables belong to the generated wrapper.
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'if [ "$1" = rev-parse ]; then' \
+    '  "$TASK6_REAL_GIT" "$@"' \
+    '  "$TASK6_REAL_GIT" branch -f moving-ref "$TASK6_PRIVATE_SHA" >/dev/null' \
+    '  exit 0' \
+    'fi' \
+    'exec "$TASK6_REAL_GIT" "$@"' \
+    >"$immutable_git_dir/git"
+  chmod +x "$immutable_git_dir/git"
+  (
+    cd "$fixture_repo"
+    PATH="$immutable_git_dir:$PATH" \
+      TASK6_REAL_GIT=$(command -v git) \
+      TASK6_PRIVATE_SHA=$immutable_private_sha \
+      "$validator" moving-ref
+  ) ||
+    fail 'validated revision was not held as an immutable commit ID'
+
+  audit_git_dir=$tmp_dir/audit-git-bin
+  mkdir -p "$audit_git_dir"
+  # shellcheck disable=SC2016 # Positional parameter belongs to the wrapper.
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'case $1 in' \
+    '  rev-parse)' \
+    '    printf "%s\n" 1111111111111111111111111111111111111111' \
+    '    ;;' \
+    '  rev-list)' \
+    '    printf "%s\n" "aaaaaaaa ./.superpowers/object.md" "bbbbbbbb ./.superpowers/shared.md"' \
+    '    ;;' \
+    '  log)' \
+    '    printf "%s\0" "./docs/plans/log.md" "./.superpowers/shared.md"' \
+    '    ;;' \
+    '  *) exit 2 ;;' \
+    'esac' \
+    >"$audit_git_dir/git"
+  chmod +x "$audit_git_dir/git"
+  run_synthetic_history_validator() {
+    (
+      cd "$fixture_repo"
+      PATH="$audit_git_dir:$PATH" "$validator" HEAD
+    )
+  }
+  synthetic_history_output=$tmp_dir/synthetic-history.out
+  capture_failure "$synthetic_history_output" \
+    run_synthetic_history_validator ||
+    fail 'synthetic history paths were accepted'
+  for synthetic_diagnostic in \
+    'private history path: .superpowers/object.md' \
+    'private history path: .superpowers/shared.md' \
+    'private history path: docs/plans/log.md'; do
+    rg -Fqx "$synthetic_diagnostic" "$synthetic_history_output" ||
+      fail "synthetic history omitted: $synthetic_diagnostic"
+    [ "$(rg -Fxc "$synthetic_diagnostic" "$synthetic_history_output")" -eq 1 ] ||
+      fail "synthetic history repeated: $synthetic_diagnostic"
+  done
+
+  new_history_fixture quoted-private-paths
+  unicode_private_path=.superpowers/秘密.md
+  newline_private_path='docs/superpowers/line
+break.md'
+  commit_history_file "$unicode_private_path" private
+  commit_history_file "$newline_private_path" private
+  fixture_git rm --quiet "$unicode_private_path" "$newline_private_path"
+  fixture_git commit --quiet -m 'Delete quoted private paths'
+  quoted_private_output=$tmp_dir/quoted-private-paths.out
+  capture_failure "$quoted_private_output" \
+    run_history_validator HEAD ||
+    fail 'C-quoted private history paths were accepted'
+  for quoted_private_diagnostic in \
+    'private history path: .superpowers/秘密.md' \
+    'private history path: docs/superpowers/line\nbreak.md'; do
+    rg -Fqx "$quoted_private_diagnostic" "$quoted_private_output" ||
+      fail "quoted private history omitted: $quoted_private_diagnostic"
+    [ "$(rg -Fxc "$quoted_private_diagnostic" "$quoted_private_output")" -eq 1 ] ||
+      fail "quoted private history repeated: $quoted_private_diagnostic"
+  done
+  [ "$(wc -l <"$quoted_private_output" | tr -d '[:space:]')" -eq 2 ] ||
+    fail 'quoted private history emitted a raw newline from a path'
+  quoted_private_sanitized=$tmp_dir/quoted-private-paths-sanitized.out
+  LC_ALL=C tr -d '\000-\011\013-\037\177' \
+    <"$quoted_private_output" >"$quoted_private_sanitized"
+  cmp -s "$quoted_private_output" "$quoted_private_sanitized" ||
+    fail 'quoted private history diagnostic contains raw control characters'
+
+  new_history_fixture injective-diagnostics
+  invalid_path_byte=$(printf '\377')
+  invalid_byte_path=".superpowers/raw-$invalid_path_byte.md"
+  literal_escape_path='.superpowers/raw-\xFF.md'
+  diagnostic_blob=$(printf '%s\n' private | fixture_git hash-object -w --stdin)
+  {
+    printf '100644 %s\t%s\0' "$diagnostic_blob" "$invalid_byte_path"
+    printf '100644 %s\t%s\0' "$diagnostic_blob" "$literal_escape_path"
+  } | fixture_git update-index -z --index-info
+  fixture_git commit --quiet -m 'Add byte-distinct private paths'
+  fixture_git read-tree --empty
+  fixture_git commit --quiet -m 'Delete byte-distinct private paths'
+  injective_diagnostics_output=$tmp_dir/injective-diagnostics.out
+  capture_failure "$injective_diagnostics_output" \
+    run_history_validator HEAD ||
+    fail 'byte-distinct private history paths were accepted'
+  for injective_diagnostic in \
+    'private history path: .superpowers/raw-\xFF.md' \
+    'private history path: .superpowers/raw-\\xFF.md'; do
+    rg -Fqx "$injective_diagnostic" "$injective_diagnostics_output" ||
+      fail "byte-distinct history omitted: $injective_diagnostic"
+    [ "$(rg -Fxc "$injective_diagnostic" "$injective_diagnostics_output")" -eq 1 ] ||
+      fail "byte-distinct history repeated: $injective_diagnostic"
+  done
+  [ "$(wc -l <"$injective_diagnostics_output" | tr -d '[:space:]')" -eq 2 ] ||
+    fail 'byte-distinct private paths did not produce distinct diagnostics'
+  injective_diagnostics_sanitized=$tmp_dir/injective-diagnostics-sanitized.out
+  LC_ALL=C tr -d '\000-\011\013-\037\177' \
+    <"$injective_diagnostics_output" >"$injective_diagnostics_sanitized"
+  cmp -s "$injective_diagnostics_output" \
+    "$injective_diagnostics_sanitized" ||
+    fail 'byte-distinct history diagnostic contains raw control characters'
+
+  new_history_fixture deleted-superpowers
+  commit_history_file .superpowers/spec.md private
+  fixture_git rm --quiet .superpowers/spec.md
+  fixture_git commit --quiet -m 'Delete private specification'
+  deleted_superpowers_output=$tmp_dir/deleted-superpowers.out
+  capture_failure "$deleted_superpowers_output" \
+    run_history_validator HEAD ||
+    fail 'deleted .superpowers history was accepted'
+  rg -Fqx 'private history path: .superpowers/spec.md' \
+    "$deleted_superpowers_output" ||
+    fail 'deleted .superpowers history did not report its path'
+  [ "$(rg -Fxc 'private history path: .superpowers/spec.md' \
+    "$deleted_superpowers_output")" -eq 1 ] ||
+    fail 'deleted .superpowers history path was reported more than once'
+
+  new_history_fixture deleted-docs-superpowers
+  commit_history_file docs/superpowers/notes.md private
+  fixture_git rm --quiet docs/superpowers/notes.md
+  fixture_git commit --quiet -m 'Delete private notes'
+  deleted_docs_superpowers_output=$tmp_dir/deleted-docs-superpowers.out
+  capture_failure "$deleted_docs_superpowers_output" \
+    run_history_validator HEAD ||
+    fail 'deleted docs/superpowers history was accepted'
+  rg -Fqx 'private history path: docs/superpowers/notes.md' \
+    "$deleted_docs_superpowers_output" ||
+    fail 'deleted docs/superpowers history did not report its path'
+
+  new_history_fixture deleted-docs-plans
+  commit_history_file docs/plans/roadmap.md private
+  fixture_git rm --quiet docs/plans/roadmap.md
+  fixture_git commit --quiet -m 'Delete private plan'
+  deleted_docs_plans_output=$tmp_dir/deleted-docs-plans.out
+  capture_failure "$deleted_docs_plans_output" \
+    run_history_validator HEAD ||
+    fail 'deleted docs/plans history was accepted'
+  rg -Fqx 'private history path: docs/plans/roadmap.md' \
+    "$deleted_docs_plans_output" ||
+    fail 'deleted docs/plans history did not report its path'
+
+  printf 'policy fixtures (history): ok\n'
+}
+
+test_workflow() {
+  validator=$script_dir/check-workflow-policy.rb
+  installer=$script_dir/install-policy-tools.sh
+  workflow_root=$tmp_dir/workflow-fixture
+  workflow_dir=$workflow_root/.github/workflows
+  mkdir -p "$workflow_dir"
+  git -C "$workflow_root" \
+    -c core.hooksPath=/dev/null \
+    -c commit.gpgsign=false \
+    init --quiet --template="$tmp_dir/empty-template"
+
+  workflow_tool_dir=$tmp_dir/workflow-policy-tools
+  if ! actionlint=$("$installer" install "$workflow_tool_dir" actionlint); then
+    fail 'could not install the approved actionlint release'
+  fi
+  [ "$actionlint" = "$workflow_tool_dir/bin/actionlint" ] ||
+    fail 'actionlint installer returned an unexpected executable path'
+  [ -x "$actionlint" ] ||
+    fail 'actionlint installer did not create an executable'
+  successful_actionlint_stub=$tmp_dir/successful-actionlint
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$successful_actionlint_stub"
+  chmod +x "$successful_actionlint_stub"
+
+  reset_workflow_fixture() {
+    # shellcheck disable=SC2016 # GitHub expressions must remain literal.
+    printf '%s\n' \
+      'name: Repository policy
+on:
+  pull_request:
+  push:
+permissions:
+  contents: read
+concurrency:
+  group: required-policy-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  repository-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      - run: scripts/test-repository-policy.sh dco' \
+      >"$workflow_dir/repository-policy.yml"
+    # shellcheck disable=SC2016 # GitHub expressions must remain literal.
+    printf '%s\n' \
+      'name: External links
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+permissions:
+  contents: read
+concurrency:
+  group: external-links-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  external-links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      - run: scripts/test-repository-policy.sh links' \
+      >"$workflow_dir/external-links.yml"
+  }
+
+  run_workflow_validator() {
+    "$validator" --root "$workflow_root" --actionlint "$actionlint"
+  }
+
+  assert_workflow_rejected() {
+    fixture_name=$1
+    expected_diagnostic=$2
+    fixture_output=$tmp_dir/workflow-$fixture_name.out
+    capture_failure "$fixture_output" run_workflow_validator ||
+      fail "$fixture_name workflow fixture was accepted"
+    rg -Fqx "$expected_diagnostic" "$fixture_output" ||
+      fail "$fixture_name did not report: $expected_diagnostic"
+  }
+
+  assert_workflow_policy_rejected() {
+    fixture_name=$1
+    expected_diagnostic=$2
+    fixture_output=$tmp_dir/workflow-$fixture_name.out
+    capture_failure "$fixture_output" \
+      "$validator" --root "$workflow_root" \
+      --actionlint "$successful_actionlint_stub" ||
+      fail "$fixture_name workflow fixture was accepted"
+    rg -Fqx "$expected_diagnostic" "$fixture_output" ||
+      fail "$fixture_name did not report: $expected_diagnostic"
+  }
+
+  add_token_environment() {
+    token_expression=$1
+    awk -v token_expression="$token_expression" '
+      /^concurrency:$/ {
+        print "env:"
+        print "  GH_TOKEN: " token_expression
+      }
+      { print }
+    ' "$workflow_dir/repository-policy.yml" \
+      >"$tmp_dir/token-environment.yml"
+    mv "$tmp_dir/token-environment.yml" \
+      "$workflow_dir/repository-policy.yml"
+  }
+
+  add_shell_token_reference() {
+    token_expression=$1
+    awk -v token_expression="$token_expression" '
+      /      - run: scripts\/test-repository-policy[.]sh dco/ {
+        print "      - run: echo \"token=" token_expression "\""
+        next
+      }
+      { print }
+    ' "$workflow_dir/repository-policy.yml" \
+      >"$tmp_dir/shell-token-reference.yml"
+    mv "$tmp_dir/shell-token-reference.yml" \
+      "$workflow_dir/repository-policy.yml"
+  }
+
+  assert_token_reference_rejected() {
+    token_variant=$1
+    token_expression=$2
+
+    reset_workflow_fixture
+    add_token_environment "$token_expression"
+    assert_workflow_rejected "token-env-$token_variant" \
+      '.github/workflows/repository-policy.yml: GitHub token must not be written to an environment variable'
+
+    reset_workflow_fixture
+    add_shell_token_reference "$token_expression"
+    assert_workflow_rejected "token-run-$token_variant" \
+      '.github/workflows/repository-policy.yml: GitHub token references are not allowed in shell run commands'
+  }
+
+  assert_token_reference_rejected_after_actionlint() {
+    token_variant=$1
+    token_expression=$2
+
+    reset_workflow_fixture
+    add_token_environment "$token_expression"
+    assert_workflow_policy_rejected "token-env-$token_variant" \
+      '.github/workflows/repository-policy.yml: GitHub token must not be written to an environment variable'
+
+    reset_workflow_fixture
+    add_shell_token_reference "$token_expression"
+    assert_workflow_policy_rejected "token-run-$token_variant" \
+      '.github/workflows/repository-policy.yml: GitHub token references are not allowed in shell run commands'
+  }
+
+  assert_double_quote_token_rejected_by_actionlint() {
+    token_variant=$1
+    token_expression=$2
+
+    reset_workflow_fixture
+    add_token_environment "$token_expression"
+    token_actionlint_output=$tmp_dir/workflow-token-actionlint-env-$token_variant.out
+    capture_failure "$token_actionlint_output" run_workflow_validator ||
+      fail "token-env-$token_variant bypassed actionlint"
+    rg -q '\[expression\]' "$token_actionlint_output" ||
+      fail "token-env-$token_variant did not fail through actionlint"
+    rg -q 'only single quotes are available' "$token_actionlint_output" ||
+      fail "token-env-$token_variant actionlint diagnostic changed"
+
+    reset_workflow_fixture
+    add_shell_token_reference "$token_expression"
+    token_actionlint_output=$tmp_dir/workflow-token-actionlint-run-$token_variant.out
+    capture_failure "$token_actionlint_output" run_workflow_validator ||
+      fail "token-run-$token_variant bypassed actionlint"
+    rg -q '\[expression\]' "$token_actionlint_output" ||
+      fail "token-run-$token_variant did not fail through actionlint"
+    rg -q 'only single quotes are available' "$token_actionlint_output" ||
+      fail "token-run-$token_variant actionlint diagnostic changed"
+  }
+
+  reset_workflow_fixture
+  run_workflow_validator ||
+    fail 'approved workflow fixture was rejected'
+
+  reset_workflow_fixture
+  sed \
+    -e 's/${{ github.ref }}/${{ github.ref + }}/' \
+    -e 's/contents: read/contents: write/' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/invalid-expression.yml"
+  mv "$tmp_dir/invalid-expression.yml" \
+    "$workflow_dir/repository-policy.yml"
+  invalid_expression_output=$tmp_dir/workflow-invalid-expression.out
+  capture_failure "$invalid_expression_output" run_workflow_validator ||
+    fail 'invalid GitHub expression was accepted'
+  rg -q '\[expression\]' "$invalid_expression_output" ||
+    fail 'invalid GitHub expression did not fail through actionlint'
+
+  reset_workflow_fixture
+  cp "$workflow_dir/repository-policy.yml" \
+    "$workflow_dir/a-duplicate-repository-policy.yml"
+  sed \
+    -e 's/group: required-policy-/group: escaped-policy-/' \
+    -e 's/^  repository-policy:/  escaped-policy:/' \
+    -e '/^on:$/a\
+  schedule:\
+    - cron: "7 1 * * *"' \
+    "$workflow_dir/a-duplicate-repository-policy.yml" \
+    >"$tmp_dir/a-duplicate-repository-policy.yml"
+  mv "$tmp_dir/a-duplicate-repository-policy.yml" \
+    "$workflow_dir/a-duplicate-repository-policy.yml"
+  assert_workflow_rejected duplicate-role-first \
+    'duplicate workflow name: Repository policy: .github/workflows/a-duplicate-repository-policy.yml, .github/workflows/repository-policy.yml'
+  rm -f "$workflow_dir/a-duplicate-repository-policy.yml"
+
+  reset_workflow_fixture
+  cp "$workflow_dir/repository-policy.yml" \
+    "$workflow_dir/z-duplicate-repository-policy.yml"
+  sed \
+    -e 's/group: required-policy-/group: escaped-policy-/' \
+    -e 's/^  repository-policy:/  escaped-policy:/' \
+    -e '/^on:$/a\
+  schedule:\
+    - cron: "7 1 * * *"' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/repository-policy-escaped.yml"
+  mv "$tmp_dir/repository-policy-escaped.yml" \
+    "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected duplicate-role-last \
+    'duplicate workflow name: Repository policy: .github/workflows/repository-policy.yml, .github/workflows/z-duplicate-repository-policy.yml'
+  rm -f "$workflow_dir/z-duplicate-repository-policy.yml"
+
+  reset_workflow_fixture
+  sed 's/contents: read/contents: write/' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/write-permission.yml"
+  mv "$tmp_dir/write-permission.yml" \
+    "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected write-permission \
+    '.github/workflows/repository-policy.yml: top-level permissions must be exactly contents: read'
+
+  reset_workflow_fixture
+  sed 's#actions/checkout@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#actions/checkout@v4#' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/tagged-use.yml"
+  mv "$tmp_dir/tagged-use.yml" \
+    "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected tagged-use \
+    '.github/workflows/repository-policy.yml: unpinned uses: actions/checkout@v4'
+
+  reset_workflow_fixture
+  sed 's#actions/checkout@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#actions/checkout@abcdef0#' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/short-sha-use.yml"
+  mv "$tmp_dir/short-sha-use.yml" \
+    "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected short-sha-use \
+    '.github/workflows/repository-policy.yml: unpinned uses: actions/checkout@abcdef0'
+
+  reset_workflow_fixture
+  sed 's/name: Repository policy/name: Repository checks/' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/missing-workflow-name.yml"
+  mv "$tmp_dir/missing-workflow-name.yml" \
+    "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected missing-workflow-name \
+    'missing workflow name: Repository policy'
+
+  reset_workflow_fixture
+  sed 's/^  repository-policy:/  policy:/' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/missing-job-name.yml"
+  mv "$tmp_dir/missing-job-name.yml" \
+    "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected missing-job-name \
+    '.github/workflows/repository-policy.yml: missing job: repository-policy'
+
+  reset_workflow_fixture
+  sed '/    runs-on: ubuntu-latest/a\
+    permissions:\
+      contents: read' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/job-permissions.yml"
+  mv "$tmp_dir/job-permissions.yml" \
+    "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected job-permissions \
+    '.github/workflows/repository-policy.yml: job repository-policy must not define permissions'
+
+  reset_workflow_fixture
+  sed 's/group: required-policy-/group: repository-policy-/' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/required-concurrency.yml"
+  mv "$tmp_dir/required-concurrency.yml" \
+    "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected required-concurrency \
+    '.github/workflows/repository-policy.yml: concurrency group must start with required-policy-'
+
+  reset_workflow_fixture
+  sed 's/group: external-links-/group: links-/' \
+    "$workflow_dir/external-links.yml" \
+    >"$tmp_dir/external-concurrency.yml"
+  mv "$tmp_dir/external-concurrency.yml" \
+    "$workflow_dir/external-links.yml"
+  assert_workflow_rejected external-concurrency \
+    '.github/workflows/external-links.yml: concurrency group must start with external-links-'
+
+  reset_workflow_fixture
+  sed '/^on:$/a\
+  schedule:\
+    - cron: "11 2 * * *"' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/required-schedule.yml"
+  mv "$tmp_dir/required-schedule.yml" \
+    "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected required-schedule \
+    '.github/workflows/repository-policy.yml: Repository policy must not run on schedule'
+
+  reset_workflow_fixture
+  sed '/^on:$/a\
+  pull_request:' \
+    "$workflow_dir/external-links.yml" \
+    >"$tmp_dir/external-pull-request.yml"
+  mv "$tmp_dir/external-pull-request.yml" \
+    "$workflow_dir/external-links.yml"
+  assert_workflow_rejected external-pull-request \
+    '.github/workflows/external-links.yml: External links must not run on pull_request'
+
+  reset_workflow_fixture
+  sed '/^on:$/a\
+  push:' \
+    "$workflow_dir/external-links.yml" \
+    >"$tmp_dir/external-push.yml"
+  mv "$tmp_dir/external-push.yml" \
+    "$workflow_dir/external-links.yml"
+  assert_workflow_rejected external-push \
+    '.github/workflows/external-links.yml: External links must not run on push'
+
+  reset_workflow_fixture
+  sed '/^on:$/a\
+  pull_request_target:' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/pull-request-target.yml"
+  mv "$tmp_dir/pull-request-target.yml" \
+    "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected pull-request-target \
+    '.github/workflows/repository-policy.yml: pull_request_target is not allowed'
+
+  assert_token_reference_rejected exact-github \
+    "\${{ github.token }}"
+  assert_token_reference_rejected spaced-cased-github \
+    "\${{ GitHub . Token }}"
+  assert_token_reference_rejected single-bracket-github \
+    "\${{ github [ 'token' ] }}"
+  assert_double_quote_token_rejected_by_actionlint double-bracket-github \
+    "\${{ github [ \"TOKEN\" ] }}"
+  assert_token_reference_rejected_after_actionlint double-bracket-github \
+    "\${{ github [ \"TOKEN\" ] }}"
+  assert_token_reference_rejected exact-secrets \
+    "\${{ secrets.GITHUB_TOKEN }}"
+  assert_token_reference_rejected spaced-cased-secrets \
+    "\${{ Secrets . GitHub_Token }}"
+  assert_token_reference_rejected single-bracket-secrets \
+    "\${{ secrets [ 'GITHUB_TOKEN' ] }}"
+  assert_double_quote_token_rejected_by_actionlint double-bracket-secrets \
+    "\${{ secrets [ \"github_token\" ] }}"
+  assert_token_reference_rejected_after_actionlint double-bracket-secrets \
+    "\${{ secrets [ \"github_token\" ] }}"
+  assert_token_reference_rejected wrapped-github \
+    "\${{ format('{0}', github.token) }}"
+  assert_token_reference_rejected wrapped-secrets \
+    "\${{ format('{0}', secrets['GITHUB_TOKEN']) }}"
+  assert_token_reference_rejected delimiter-in-string \
+    "\${{ format('}}{0}', github.token) }}"
+  assert_token_reference_rejected doubled-quote-string \
+    "\${{ format('it''s }} {0}', secrets.GITHUB_TOKEN) }}"
+  assert_token_reference_rejected computed-github-index \
+    "\${{ github[format('{0}', 'token')] }}"
+  assert_token_reference_rejected computed-secrets-index \
+    "\${{ secrets[format('{0}_{1}', 'GITHUB', 'TOKEN')] }}"
+
+  reset_workflow_fixture
+  add_token_environment "\${{ github['sha'] }}"
+  run_workflow_validator ||
+    fail 'static non-token environment index was rejected'
+
+  reset_workflow_fixture
+  add_shell_token_reference "\${{ secrets['NOT_GITHUB_TOKEN'] }}"
+  run_workflow_validator ||
+    fail 'static non-token shell index was rejected'
+
+  reset_workflow_fixture
+  sed '/^concurrency:$/i\
+env:\
+  GH_TOKEN: ${{ github.token }}' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/token-environment.yml"
+  mv "$tmp_dir/token-environment.yml" \
+    "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected token-environment \
+    '.github/workflows/repository-policy.yml: GitHub token must not be written to an environment variable'
+
+  reset_workflow_fixture
+  sed '/      - run: scripts\/test-repository-policy.sh dco/c\
+      - run: |\
+          curl --fail --location https://example.com/policy-tool --output "$RUNNER_TEMP/policy-tool"\
+          chmod +x "$RUNNER_TEMP/policy-tool"\
+          "$RUNNER_TEMP/policy-tool" --token "${{ github.token }}"' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/downloaded-token.yml"
+  mv "$tmp_dir/downloaded-token.yml" \
+    "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected downloaded-token \
+    '.github/workflows/repository-policy.yml: GitHub token references are not allowed in shell run commands'
+
+  printf 'policy fixtures (workflow): ok\n'
+}
+
 test_yaml() {
   validator=$script_dir/check-community-yaml.rb
 
@@ -1899,14 +2535,20 @@ case ${1:-} in
   dco)
     test_dco
     ;;
+  history)
+    test_history
+    ;;
   links)
     test_links
+    ;;
+  workflow)
+    test_workflow
     ;;
   yaml)
     test_yaml
     ;;
   *)
-    printf 'usage: %s {tools|dco|links|yaml}\n' "$0" >&2
+    printf 'usage: %s {tools|dco|history|links|workflow|yaml}\n' "$0" >&2
     exit 2
     ;;
 esac
