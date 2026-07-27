@@ -287,6 +287,7 @@ class EvidencePacket:
     generated_at: datetime
 
     def __post_init__(self) -> None:
+        _require_non_blank(self.query_id, "query_id")
         _require_aware(self.generated_at, "generated_at")
         items = tuple(self.items)
         if any(item.claim.scope != self.scope for item in items):
