@@ -1,7 +1,10 @@
 """Bind every reusable memory adapter contract to the in-memory adapter."""
 
+import ast
 import asyncio
+import inspect
 
+import memory_adapter_contract
 import pytest
 from memory_adapter_contract import (
     EPISODE_ADAPTER_CONTRACTS,
@@ -39,6 +42,21 @@ class InMemoryMemoryAdapterHarness:
     @property
     def committed_events(self) -> tuple[EventEnvelope, ...]:
         return self._database.events
+
+
+def test_reusable_contract_has_no_internal_application_imports() -> None:
+    syntax = ast.parse(inspect.getsource(memory_adapter_contract))
+    imported_modules = {
+        node.module
+        for node in ast.walk(syntax)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert not {
+        module
+        for module in imported_modules
+        if module.startswith("engrammesh.modules.memory.application")
+    }
 
 
 @pytest.mark.asyncio
