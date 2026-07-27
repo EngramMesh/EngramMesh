@@ -193,10 +193,23 @@ def workflow_event_present?(workflow, event_name)
   events && events.key?(event_name)
 end
 
-def workflow_event_branches_include_main?(workflow, event_name)
+def workflow_event_branches_include_main_without_negative_patterns?(workflow, event_name)
   events = workflow_event_mapping(workflow)
   event = events && events[event_name]
-  event.is_a?(Hash) && Array(event["branches"]).include?("main")
+  return false unless event.is_a?(Hash)
+
+  patterns =
+    case event["branches"]
+    when String
+      [event["branches"]]
+    when Array
+      event["branches"]
+    else
+      return false
+    end
+
+  patterns.include?("main") &&
+    patterns.all? { |pattern| pattern.is_a?(String) && !pattern.start_with?("!") }
 end
 
 def workflow_event?(workflow, event_name)
@@ -326,10 +339,9 @@ def static_bracket_property(source, index)
 end
 
 # This is intentionally a conservative lexical detector, not an Actions
-# expression evaluator. Dot and static bracket access reject the exact token
-# properties. Any non-static bracket access directly on github or secrets is
-# rejected because it could compute the token property; static non-token
-# access such as github['sha'] remains allowed.
+# expression evaluator. Root github and secrets contexts, exact token
+# properties, and non-static bracket access directly on github or secrets are
+# rejected. Static non-token access such as github['sha'] remains allowed.
 def token_access_in_expression?(expression)
   source = expression.b
   index = 0
@@ -344,14 +356,20 @@ def token_access_in_expression?(expression)
       index += 1
       next
     end
+    identifier_start = index
     index = finish
     token_property = TOKEN_PROPERTIES[identifier]
     next unless token_property
+
+    preceding = identifier_start - 1
+    preceding -= 1 while preceding >= 0 && expression_space?(source.getbyte(preceding))
+    next if preceding >= 0 && source.getbyte(preceding) == 46
 
     accessor = skip_expression_space(source, index)
     if source.getbyte(accessor) == 46
       property_start = skip_expression_space(source, accessor + 1)
       property, property_end = read_identifier(source, property_start)
+      return true unless property
       return true if property == token_property
 
       index = property_end
@@ -361,6 +379,8 @@ def token_access_in_expression?(expression)
       return true if kind == :dynamic || property == token_property
 
       index = property_end
+    else
+      return true
     end
   end
   false
@@ -450,9 +470,9 @@ end
 end
 
 ["pull_request", "push"].each do |event_name|
-  next if workflow_event_branches_include_main?(required_workflow, event_name)
+  next if workflow_event_branches_include_main_without_negative_patterns?(required_workflow, event_name)
 
-  warn "#{required_path}: #{event_name} branches must include main"
+  warn "#{required_path}: #{event_name} branches must include main without negative patterns"
   exit 1
 end
 

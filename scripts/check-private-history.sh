@@ -16,7 +16,7 @@ audit_dir=$(mktemp -d "${TMPDIR:-/tmp}/engrammesh-history.XXXXXX")
 trap 'rm -rf "$audit_dir"' EXIT HUP INT TERM
 
 git rev-list --objects "$revision" >"$audit_dir/objects"
-git log -z --format= --name-only "$revision" >"$audit_dir/names"
+git log -m -z --format= --name-only "$revision" >"$audit_dir/names"
 
 ruby - "$audit_dir/objects" "$audit_dir/names" \
   "$audit_dir/offending-paths" <<'RUBY'
@@ -70,11 +70,13 @@ def normalize_path(path)
 end
 
 def private_path?(path)
-  [
-    ".superpowers/".b,
-    "docs/superpowers/".b,
-    "docs/plans/".b
-  ].any? { |prefix| path.start_with?(prefix) }
+  [".superpowers".b, "docs/superpowers".b, "docs/plans".b].any? do |base|
+    path == base || path.start_with?(base + "/".b)
+  end
+end
+
+def private_base_path?(path)
+  [".superpowers".b, "docs/superpowers".b, "docs/plans".b].include?(path)
 end
 
 def safe_display(path)
@@ -137,9 +139,16 @@ object_paths = File.binread(ARGV.fetch(0)).lines(chomp: true).each_with_object([
   paths << decode_git_c_path(line.byteslice(separator + 1..-1))
 end
 name_paths = File.binread(ARGV.fetch(1)).split("\0".b, -1).reject(&:empty?)
+normalized_object_paths = object_paths.map { |path| normalize_path(path) }
+normalized_name_paths = name_paths.map { |path| normalize_path(path) }
 
-offending_paths = (object_paths + name_paths)
-  .map { |path| normalize_path(path) }
+# rev-list --objects includes tree names as well as changed file names. Exact
+# base tree names are represented by the name stream's descendant entries, so
+# omit them here to preserve one byte-safe diagnostic per offending path.
+offending_paths = (
+  normalized_object_paths.reject { |path| private_base_path?(path) } +
+  normalized_name_paths
+)
   .select { |path| private_path?(path) }
   .uniq
   .sort

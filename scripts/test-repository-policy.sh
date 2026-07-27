@@ -850,6 +850,50 @@ break.md'
     "$deleted_docs_plans_output" ||
     fail 'deleted docs/plans history did not report its path'
 
+  new_history_fixture merge-resolution-exact-private-name
+  commit_history_file README.md base
+  fixture_git checkout --quiet -b merge-side
+  commit_history_file SIDE.md side
+  fixture_git checkout --quiet -
+  commit_history_file MAIN.md main
+  fixture_git merge --quiet --no-commit --no-ff merge-side >/dev/null 2>&1
+  printf '%s\n' private >"$fixture_repo/.superpowers"
+  fixture_git add .superpowers
+  fixture_git commit --quiet -m 'Merge side with private resolution artifact'
+  merge_resolution_exact_output=$tmp_dir/merge-resolution-exact-private-name.out
+  capture_failure "$merge_resolution_exact_output" \
+    run_history_validator HEAD ||
+    fail 'merge-resolution exact private name history was accepted'
+  grep -Fqx 'private history path: .superpowers' \
+    "$merge_resolution_exact_output" ||
+    fail 'merge-resolution exact private name was not reported'
+  [ "$(grep -Fxc 'private history path: .superpowers' \
+    "$merge_resolution_exact_output")" -eq 1 ] ||
+    fail 'merge-resolution exact private name was reported more than once'
+
+  new_history_fixture deleted-exact-private-names
+  commit_history_file .superpowers private
+  commit_history_file docs/superpowers private
+  commit_history_file docs/plans private
+  fixture_git rm --quiet .superpowers docs/superpowers docs/plans
+  fixture_git commit --quiet -m 'Delete exact private artifact names'
+  deleted_exact_private_names_output=$tmp_dir/deleted-exact-private-names.out
+  capture_failure "$deleted_exact_private_names_output" \
+    run_history_validator HEAD ||
+    fail 'deleted exact private artifact names history was accepted'
+  for exact_private_name in \
+    .superpowers \
+    docs/superpowers \
+    docs/plans; do
+    exact_private_diagnostic="private history path: $exact_private_name"
+    grep -Fqx "$exact_private_diagnostic" \
+      "$deleted_exact_private_names_output" ||
+      fail "deleted exact private artifact name was not reported: $exact_private_name"
+    [ "$(grep -Fxc "$exact_private_diagnostic" \
+      "$deleted_exact_private_names_output")" -eq 1 ] ||
+      fail "deleted exact private artifact name was reported more than once: $exact_private_name"
+  done
+
   printf 'policy fixtures (history): ok\n'
 }
 
@@ -976,6 +1020,43 @@ jobs:
       "$workflow_dir/repository-policy.yml"
   }
 
+  add_matrix_environment() {
+    matrix_expression=$1
+    awk -v matrix_expression="$matrix_expression" '
+      /^    runs-on: ubuntu-latest$/ {
+        print
+        print "    strategy:"
+        print "      matrix:"
+        print "        github: [safe]"
+        print "        secrets: [safe]"
+        print "    env:"
+        print "      MATRIX_CONTEXT: " matrix_expression
+        next
+      }
+      { print }
+    ' "$workflow_dir/repository-policy.yml" \
+      >"$tmp_dir/matrix-environment.yml"
+    mv "$tmp_dir/matrix-environment.yml" \
+      "$workflow_dir/repository-policy.yml"
+  }
+
+  add_matrix_strategy() {
+    awk '
+      /^    runs-on: ubuntu-latest$/ {
+        print
+        print "    strategy:"
+        print "      matrix:"
+        print "        github: [safe]"
+        print "        secrets: [safe]"
+        next
+      }
+      { print }
+    ' "$workflow_dir/repository-policy.yml" \
+      >"$tmp_dir/matrix-strategy.yml"
+    mv "$tmp_dir/matrix-strategy.yml" \
+      "$workflow_dir/repository-policy.yml"
+  }
+
   assert_token_reference_rejected() {
     token_variant=$1
     token_expression=$2
@@ -1036,6 +1117,19 @@ jobs:
     fail 'approved workflow fixture was rejected'
 
   reset_workflow_fixture
+  sed \
+    -e '/^  pull_request:/,/^  push:/ s/    branches: \[main\]/    branches: main/' \
+    -e '/^  push:/,/^  workflow_dispatch:/ s/    branches: \[main\]/    branches: [main, develop]/' \
+    -e '/^on:$/a\
+  repository_dispatch:' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/positive-branch-filters.yml"
+  mv "$tmp_dir/positive-branch-filters.yml" \
+    "$workflow_dir/repository-policy.yml"
+  run_workflow_validator ||
+    fail 'scalar main, extra positive branches, or safe extra event was rejected'
+
+  reset_workflow_fixture
   sed '/^  pull_request:/,/^  push:/{ /^  push:/!d; }' \
     "$workflow_dir/repository-policy.yml" \
     >"$tmp_dir/missing-pull-request.yml"
@@ -1051,7 +1145,16 @@ jobs:
   mv "$tmp_dir/pull-request-branches.yml" \
     "$workflow_dir/repository-policy.yml"
   assert_workflow_rejected pull-request-branches \
-    '.github/workflows/repository-policy.yml: pull_request branches must include main'
+    '.github/workflows/repository-policy.yml: pull_request branches must include main without negative patterns'
+
+  reset_workflow_fixture
+  sed '/^  pull_request:/,/^  push:/ s/    branches: \[main\]/    branches: [main, "!main"]/' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/pull-request-negative-branches.yml"
+  mv "$tmp_dir/pull-request-negative-branches.yml" \
+    "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected pull-request-negative-branches \
+    '.github/workflows/repository-policy.yml: pull_request branches must include main without negative patterns'
 
   reset_workflow_fixture
   sed '/^  push:/,/^  workflow_dispatch:/{ /^  workflow_dispatch:/!d; }' \
@@ -1067,7 +1170,15 @@ jobs:
     >"$tmp_dir/push-branches.yml"
   mv "$tmp_dir/push-branches.yml" "$workflow_dir/repository-policy.yml"
   assert_workflow_rejected push-branches \
-    '.github/workflows/repository-policy.yml: push branches must include main'
+    '.github/workflows/repository-policy.yml: push branches must include main without negative patterns'
+
+  reset_workflow_fixture
+  sed '/^  push:/,/^  workflow_dispatch:/ s/    branches: \[main\]/    branches: [main, "!main"]/' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/push-negative-branches.yml"
+  mv "$tmp_dir/push-negative-branches.yml" "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected push-negative-branches \
+    '.github/workflows/repository-policy.yml: push branches must include main without negative patterns'
 
   reset_workflow_fixture
   sed '/^  workflow_dispatch:$/d' "$workflow_dir/repository-policy.yml" \
@@ -1294,6 +1405,18 @@ jobs:
     "\${{ github[format('{0}', 'token')] }}"
   assert_token_reference_rejected computed-secrets-index \
     "\${{ secrets[format('{0}_{1}', 'GITHUB', 'TOKEN')] }}"
+  assert_token_reference_rejected_after_actionlint whole-github \
+    "\${{ github }}"
+  assert_token_reference_rejected_after_actionlint whole-github-no-leading-space \
+    "\${{github}}"
+  assert_token_reference_rejected_after_actionlint whole-secrets \
+    "\${{ secrets }}"
+  assert_token_reference_rejected_after_actionlint to-json-github \
+    "\${{ toJSON(github) }}"
+  assert_token_reference_rejected_after_actionlint to-json-secrets \
+    "\${{ toJSON(secrets) }}"
+  assert_token_reference_rejected_after_actionlint incomplete-github-root-property \
+    "\${{github.}}"
 
   reset_workflow_fixture
   add_token_environment "\${{ github['sha'] }}"
@@ -1304,6 +1427,17 @@ jobs:
   add_shell_token_reference "\${{ secrets['NOT_GITHUB_TOKEN'] }}"
   run_workflow_validator ||
     fail 'static non-token shell index was rejected'
+
+  reset_workflow_fixture
+  add_matrix_environment "\${{ matrix.github }}"
+  run_workflow_validator ||
+    fail 'matrix.github environment reference was rejected'
+
+  reset_workflow_fixture
+  add_matrix_strategy
+  add_shell_token_reference "\${{ matrix.secrets }}"
+  run_workflow_validator ||
+    fail 'matrix.secrets shell reference was rejected'
 
   reset_workflow_fixture
   sed '/^concurrency:$/i\
@@ -1734,6 +1868,7 @@ test_baseline() {
   baseline_root=$tmp_dir/baseline-fixture
   mkdir -p "$baseline_root"
   git -C "$repository_root" archive HEAD | tar -x -C "$baseline_root"
+  cp "$repository_root/.gitignore" "$baseline_root/.gitignore"
   mkdir -p "$baseline_root/.github/workflows"
 
   policy_files='
@@ -1784,6 +1919,18 @@ scripts/check-repository-policy.sh
 
   run_baseline_validator ||
     fail 'complete repository baseline fixture was rejected'
+
+  for ignored_path in \
+    .superpowers \
+    docs/superpowers \
+    docs/plans \
+    .superpowers/sdd/probe \
+    docs/superpowers/probe \
+    docs/plans/probe
+  do
+    git -C "$baseline_root" check-ignore -- "$ignored_path" >/dev/null 2>&1 ||
+      fail "baseline fixture does not ignore local artifact path: $ignored_path"
+  done
 
   awk '{ printf "%s\r\n", $0 }' "$baseline_root/CONTRIBUTING.md" \
     >"$tmp_dir/contributing-crlf.md"
