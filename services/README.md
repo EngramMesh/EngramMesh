@@ -271,6 +271,8 @@ A future PostgreSQL Episode adapter must bind every assertion in
 `tests/contract/memory_adapter_contract.py` through its own typed harness without
 changing the reusable assertion bodies. That core registry does not assume one
 global lock and does not require Claim operations or cursors to be unavailable.
+Its reusable assertion module imports only public memory ports, domain values,
+and shared contracts; application orchestration is tested separately.
 `IN_MEMORY_CAPABILITY_CONTRACTS` separately describes the current in-memory
 adapter's unavailable Claims, rejected cursors, and cancellation while queued
 on its process-global lock. Another adapter binds a capability profile only

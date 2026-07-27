@@ -213,7 +213,7 @@ done
 
 ## 下一 Adapter 的义务
 
-未来的 PostgreSQL Episode Adapter 必须通过自己的类型化测试 Harness 绑定 `tests/contract/memory_adapter_contract.py` 中 `EPISODE_ADAPTER_CONTRACTS` 的每个断言，且不得修改可复用断言主体。该核心 Registry 不假定单一全局锁，也不要求 Claim 操作或游标不可用。`IN_MEMORY_CAPABILITY_CONTRACTS` 单独描述当前内存 Adapter 的能力边界：Claim 不可用、拒绝游标，以及任务在其进程全局锁上排队时的取消行为。其他 Adapter 只有在相同能力与同步模型适用时才绑定对应的能力 Profile。
+未来的 PostgreSQL Episode Adapter 必须通过自己的类型化测试 Harness 绑定 `tests/contract/memory_adapter_contract.py` 中 `EPISODE_ADAPTER_CONTRACTS` 的每个断言，且不得修改可复用断言主体。该核心 Registry 不假定单一全局锁，也不要求 Claim 操作或游标不可用。可复用断言模块只导入公共记忆 Port、领域值与共享契约；应用编排由其他测试单独验证。`IN_MEMORY_CAPABILITY_CONTRACTS` 单独描述当前内存 Adapter 的能力边界：Claim 不可用、拒绝游标，以及任务在其进程全局锁上排队时的取消行为。其他 Adapter 只有在相同能力与同步模型适用时才绑定对应的能力 Profile。
 
 PostgreSQL Adapter 还必须补充 PostgreSQL 专属的迁移、约束、事务隔离、租户强制与失败行为集成测试。新增共享能力行为需要单独评审的契约 Profile，而不是修改可移植 Episode 断言主体。
 

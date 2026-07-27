@@ -15,10 +15,6 @@ from uuid import UUID
 
 import pytest
 
-from engrammesh.modules.memory.application.contracts import RecordEpisodeCommand
-from engrammesh.modules.memory.application.record_episode import (
-    RecordEpisodeHandler,
-)
 from engrammesh.modules.memory.domain.model import (
     Episode,
     MemoryScope,
@@ -27,7 +23,7 @@ from engrammesh.modules.memory.domain.model import (
     SourceType,
 )
 from engrammesh.modules.memory.ports import (
-    AuthorizationRequest,
+    AppendResult,
     ClaimProposal,
     MemoryQuery,
     MemoryUnitOfWorkFactory,
@@ -115,30 +111,6 @@ class AsyncStartBarrier:
         self._release.set()
 
 
-class _AllowingAuthorization:
-    async def authorize(self, request: AuthorizationRequest) -> bool:
-        del request
-        return True
-
-
-class _FixedClock:
-    async def now(self) -> datetime:
-        return INGESTED_AT
-
-
-class _BarrierIdentities:
-    def __init__(self, *, barrier: AsyncStartBarrier, identifier: int) -> None:
-        self._barrier = barrier
-        self._identifier = identifier
-
-    async def new_memory_id(self) -> MemoryId:
-        await self._barrier.arrive_and_wait()
-        return memory_id(self._identifier)
-
-    async def new_event_id(self) -> EventId:
-        return event_id(1000 + self._identifier)
-
-
 async def _cancel_and_drain_tasks[T](
     tasks: tuple[asyncio.Task[T], ...],
 ) -> None:
@@ -210,25 +182,6 @@ def make_event(
         causation_id=None,
         occurred_at=episode.ingested_at,
         payload={"episode_id": str(episode.id)},
-    )
-
-
-def make_command(
-    *,
-    idempotency_key: str = "shared-key",
-) -> RecordEpisodeCommand:
-    return RecordEpisodeCommand(
-        correlation_id=CORRELATION_ID,
-        actor_id=ACTOR_ID,
-        scope=make_scope(),
-        source_type=SourceType.USER,
-        content_ref=CONTENT_REF,
-        observed_at=OBSERVED_AT,
-        content_hash=f"sha256:{1:064x}",
-        idempotency_key=idempotency_key,
-        sensitivity=Sensitivity.CONFIDENTIAL,
-        retention_class=RetentionClass.STANDARD,
-        consent_basis="user_request",
     )
 
 
@@ -415,23 +368,20 @@ async def assert_twenty_concurrent_duplicates_converge(
 ) -> None:
     harness = make_harness()
     barrier = AsyncStartBarrier(parties=20)
-    command = make_command()
 
-    async def record(identifier: int) -> tuple[MemoryId, bool]:
-        handler = RecordEpisodeHandler(
-            authorization=_AllowingAuthorization(),
-            clock=_FixedClock(),
-            identities=_BarrierIdentities(
-                barrier=barrier,
-                identifier=identifier,
-            ),
-            unit_of_work_factory=harness.unit_of_work_factory,
-        )
-        result = await handler.handle(command)
-        return result.episode_id, result.created
+    async def append(identifier: int) -> AppendResult:
+        episode = make_episode(identifier, idempotency_key="shared-key")
+        event = make_event(identifier, episode=episode)
+        await barrier.arrive_and_wait()
+        async with harness.unit_of_work_factory.create() as unit_of_work:
+            result = await unit_of_work.episodes.append(episode)
+            if result.created:
+                await unit_of_work.outbox.publish(event)
+            await unit_of_work.commit()
+        return result
 
     tasks = tuple(
-        asyncio.create_task(record(value)) for value in range(1, 21)
+        asyncio.create_task(append(value)) for value in range(1, 21)
     )
     try:
         await barrier.wait_until_full()
@@ -446,11 +396,11 @@ async def assert_twenty_concurrent_duplicates_converge(
         barrier.release()
         await _cancel_and_drain_tasks(tasks)
 
-    assert sum(created for _, created in results) == 1
-    assert len({episode_id for episode_id, _ in results}) == 1
+    assert sum(result.created for result in results) == 1
+    assert len({result.episode_id for result in results}) == 1
     assert len(harness.committed_episodes) == 1
     assert len(harness.committed_events) == 1
-    assert {episode_id for episode_id, _ in results} == {
+    assert {result.episode_id for result in results} == {
         harness.committed_episodes[0].id
     }
     assert (
