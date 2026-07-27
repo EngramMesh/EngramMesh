@@ -467,6 +467,17 @@ def test_evidence_packet_rejects_naive_generated_at() -> None:
         )
 
 
+@pytest.mark.parametrize("query_id", ("", "   ", "\t", "\n"))
+def test_evidence_packet_rejects_blank_query_id(query_id: str) -> None:
+    with pytest.raises(ValueError, match="query_id"):
+        EvidencePacket(
+            query_id=query_id,
+            scope=MemoryScope(**scope_values()),
+            items=(),
+            generated_at=NOW,
+        )
+
+
 @pytest.mark.parametrize("container_type", (EvidencePacket, CandidateSet))
 def test_evidence_containers_reject_claims_outside_their_scope(
     container_type: type[EvidencePacket | CandidateSet],
