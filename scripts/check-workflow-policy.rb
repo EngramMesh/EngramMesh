@@ -177,13 +177,30 @@ unless external_group.is_a?(String) && external_group.start_with?("external-link
   exit 1
 end
 
+def workflow_events(workflow)
+  return workflow["on"] if workflow.key?("on")
+
+  workflow[true]
+end
+
+def workflow_event_mapping(workflow)
+  events = workflow_events(workflow)
+  events if events.is_a?(Hash)
+end
+
+def workflow_event_present?(workflow, event_name)
+  events = workflow_event_mapping(workflow)
+  events && events.key?(event_name)
+end
+
+def workflow_event_branches_include_main?(workflow, event_name)
+  events = workflow_event_mapping(workflow)
+  event = events && events[event_name]
+  event.is_a?(Hash) && Array(event["branches"]).include?("main")
+end
+
 def workflow_event?(workflow, event_name)
-  events =
-    if workflow.key?("on")
-      workflow["on"]
-    else
-      workflow[true]
-    end
+  events = workflow_events(workflow)
   case events
   when Hash
     events.key?(event_name)
@@ -418,6 +435,24 @@ end
 
 if workflow_event?(required_workflow, "schedule")
   warn "#{required_path}: Repository policy must not run on schedule"
+  exit 1
+end
+
+[
+  "pull_request",
+  "push",
+  "workflow_dispatch"
+].each do |event_name|
+  unless workflow_event_present?(required_workflow, event_name)
+    warn "#{required_path}: missing required event: #{event_name}"
+    exit 1
+  end
+end
+
+["pull_request", "push"].each do |event_name|
+  next if workflow_event_branches_include_main?(required_workflow, event_name)
+
+  warn "#{required_path}: #{event_name} branches must include main"
   exit 1
 end
 
