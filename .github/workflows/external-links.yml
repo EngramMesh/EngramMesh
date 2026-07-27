@@ -1,0 +1,43 @@
+name: External links
+
+"on":
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-links-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  external-links:
+    name: external-links
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install checksum-pinned Lychee
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/install-policy-tools.sh install "$RUNNER_TEMP/policy-tools" lychee
+
+      - name: Check external links
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/policy-tools/bin/lychee" \
+            --no-progress \
+            --max-retries 2 \
+            --timeout 20 \
+            --exclude '(?i)^https?://(?:localhost|(?:[^./:]+\.)*localhost|127(?:\.[0-9]{1,3}){3}|\[::1\])(?::[0-9]+)?(?:/|$)' \
+            --exclude '(?i)^https?://(?:[^./:]+\.)*(?:example\.com|example\.org|example\.net)(?::[0-9]+)?(?:/|$)' \
+            --exclude '(?i)^https?://(?:[^./:]+\.)*(?:example|invalid|localhost|test)(?::[0-9]+)?(?:/|$)' \
+            --exclude '^https://github\.com/EngramMesh/EngramMesh/security/advisories/new$' \
+            './**/*.md'

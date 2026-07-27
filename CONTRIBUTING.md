@@ -20,6 +20,9 @@ Signed-off-by: Your Name <your.email@example.com>
 
 By signing off, you certify that the contribution is your original work or that you otherwise have the right to submit it. Accepted contributions use the applicable repository license: Apache License 2.0 for code and CC BY 4.0 for documentation, unless explicitly stated otherwise.
 
+Maintainers integrate pull requests with Rebase and Merge so each validated
+DCO trailer remains in the main history. Squash Merge and Merge Commit are not used.
+
 ## Commit and review expectations
 
 Use a Conventional Commits-style subject, for example:

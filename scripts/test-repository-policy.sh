@@ -820,7 +820,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-      - run: scripts/test-repository-policy.sh dco' \
+      - run: |
+          git cat-file -e "${HEAD_SHA}^{commit}"
+          git cat-file -e "${TREE_SHA}^{commit}"
+          git cat-file -e "${BASE_SHA}^{commit}"
+          scripts/test-repository-policy.sh dco' \
       >"$workflow_dir/repository-policy.yml"
     # shellcheck disable=SC2016 # GitHub expressions must remain literal.
     printf '%s\n' \
@@ -885,8 +889,8 @@ jobs:
   add_shell_token_reference() {
     token_expression=$1
     awk -v token_expression="$token_expression" '
-      /      - run: scripts\/test-repository-policy[.]sh dco/ {
-        print "      - run: echo \"token=" token_expression "\""
+      /          scripts\/test-repository-policy[.]sh dco/ {
+        print "          echo \"token=" token_expression "\""
         next
       }
       { print }
@@ -954,6 +958,28 @@ jobs:
   reset_workflow_fixture
   run_workflow_validator ||
     fail 'approved workflow fixture was rejected'
+
+  for guard_name in head tree base; do
+    case $guard_name in
+      head)
+        guard="git cat-file -e \"\${HEAD_SHA}^{commit}\""
+        ;;
+      tree)
+        guard="git cat-file -e \"\${TREE_SHA}^{commit}\""
+        ;;
+      base)
+        guard="git cat-file -e \"\${BASE_SHA}^{commit}\""
+        ;;
+    esac
+    reset_workflow_fixture
+    grep -Fv "$guard" \
+      "$workflow_dir/repository-policy.yml" \
+      >"$tmp_dir/missing-$guard_name-guard.yml"
+    mv "$tmp_dir/missing-$guard_name-guard.yml" \
+      "$workflow_dir/repository-policy.yml"
+    assert_workflow_rejected "missing-$guard_name-guard" \
+      ".github/workflows/repository-policy.yml: missing required guard: $guard"
+  done
 
   reset_workflow_fixture
   sed \
@@ -1173,8 +1199,7 @@ env:\
     '.github/workflows/repository-policy.yml: GitHub token must not be written to an environment variable'
 
   reset_workflow_fixture
-  sed '/      - run: scripts\/test-repository-policy.sh dco/c\
-      - run: |\
+  sed '/          scripts\/test-repository-policy.sh dco/c\
           curl --fail --location https://example.com/policy-tool --output "$RUNNER_TEMP/policy-tool"\
           chmod +x "$RUNNER_TEMP/policy-tool"\
           "$RUNNER_TEMP/policy-tool" --token "${{ github.token }}"' \
@@ -1186,6 +1211,510 @@ env:\
     '.github/workflows/repository-policy.yml: GitHub token references are not allowed in shell run commands'
 
   printf 'policy fixtures (workflow): ok\n'
+}
+
+test_orchestration() {
+  orchestrator=$script_dir/check-repository-policy.sh
+  fixture_root=$tmp_dir/orchestration-baseline
+  fixture_scripts=$fixture_root/scripts
+  mkdir -p "$fixture_scripts"
+  git -C "$fixture_root" \
+    -c core.hooksPath=/dev/null \
+    -c commit.gpgsign=false \
+    init --quiet --template="$tmp_dir/empty-template"
+  git -C "$fixture_root" config user.name 'Fixture User'
+  git -C "$fixture_root" config user.email 'fixture@example.com'
+
+  printf '%s\n' '# Baseline fixture' >"$fixture_root/README.md"
+  git -C "$fixture_root" add README.md
+  git -C "$fixture_root" commit --quiet \
+    -m 'Baseline fixture' \
+    -m 'Signed-off-by: Fixture User <fixture@example.com>'
+
+  # shellcheck disable=SC2016 # Stub source expands in the fixture process.
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'exit 0' \
+    >"$fixture_scripts/test-repository-policy.sh"
+  # shellcheck disable=SC2016 # Stub source expands in the fixture process.
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'printf "baseline fixture failure\n" >&2' \
+    'exit 1' \
+    >"$fixture_scripts/check-repository-baseline.sh"
+  for fixture_script in \
+    check-dco.sh \
+    check-markdown-links.sh \
+    check-community-yaml.rb \
+    check-workflow-policy.rb \
+    check-private-history.sh
+  do
+    printf '%s\n' \
+      '#!/bin/sh' \
+      'set -eu' \
+      'exit 0' \
+      >"$fixture_scripts/$fixture_script"
+  done
+  chmod +x "$fixture_scripts"/*
+
+  lychee_stub=$tmp_dir/orchestration-lychee
+  actionlint_stub=$tmp_dir/orchestration-actionlint
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$lychee_stub"
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$actionlint_stub"
+  chmod +x "$lychee_stub" "$actionlint_stub"
+
+  fixture_output=$tmp_dir/orchestration-baseline.out
+  if [ -f "$orchestrator" ]; then
+    cp "$orchestrator" "$fixture_scripts/check-repository-policy.sh"
+    chmod +x "$fixture_scripts/check-repository-policy.sh"
+  fi
+  run_baseline_fixture() {
+    (
+      cd "$fixture_root"
+      LYCHEE_BIN=$lychee_stub ACTIONLINT_BIN=$actionlint_stub \
+        "$fixture_scripts/check-repository-policy.sh" \
+        --all HEAD --tree HEAD
+    )
+  }
+  capture_failure "$fixture_output" run_baseline_fixture ||
+    fail 'deliberately failing baseline fixture was accepted'
+  rg -Fqx 'baseline fixture failure' "$fixture_output" ||
+    fail 'orchestrator did not reach the deliberately failing baseline'
+
+  valid_root=$tmp_dir/orchestration-valid
+  valid_scripts=$valid_root/scripts
+  orchestration_log=$tmp_dir/orchestration-valid.log
+  mkdir -p "$valid_scripts"
+  valid_root=$(CDPATH='' cd -- "$valid_root" && pwd -P)
+  valid_scripts=$valid_root/scripts
+  cp "$orchestrator" "$valid_scripts/check-repository-policy.sh"
+  chmod +x "$valid_scripts/check-repository-policy.sh"
+
+  # shellcheck disable=SC2016 # Stub source expands in the fixture process.
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    '[ "$#" -eq 1 ]' \
+    'printf "fixture:%s\n" "$1" >>"$ORCHESTRATION_LOG"' \
+    >"$valid_scripts/test-repository-policy.sh"
+  # shellcheck disable=SC2016 # Stub source expands in the fixture process.
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    '[ "$#" -eq 0 ]' \
+    'printf "baseline\n" >>"$ORCHESTRATION_LOG"' \
+    >"$valid_scripts/check-repository-baseline.sh"
+  # shellcheck disable=SC2016 # Stub source expands in the fixture process.
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'printf "dco:%s\n" "$*" >>"$ORCHESTRATION_LOG"' \
+    >"$valid_scripts/check-dco.sh"
+  # shellcheck disable=SC2016 # Stub source expands in the fixture process.
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'printf "links:%s\n" "$*" >>"$ORCHESTRATION_LOG"' \
+    >"$valid_scripts/check-markdown-links.sh"
+  # shellcheck disable=SC2016 # Stub source expands in the fixture process.
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'printf "yaml:%s\n" "$*" >>"$ORCHESTRATION_LOG"' \
+    >"$valid_scripts/check-community-yaml.rb"
+  printf '%s\n' \
+    '#!/usr/bin/env ruby' \
+    'File.open(ENV.fetch("ORCHESTRATION_LOG"), "a") do |output|' \
+    '  output.puts("workflow:#{ARGV.join(" ")}")' \
+    'end' \
+    >"$valid_scripts/check-workflow-policy.rb"
+  # shellcheck disable=SC2016 # Stub source expands in the fixture process.
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'printf "history:%s\n" "$*" >>"$ORCHESTRATION_LOG"' \
+    >"$valid_scripts/check-private-history.sh"
+  # shellcheck disable=SC2016 # Stub source expands in the fixture process.
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    '[ "$#" -eq 3 ]' \
+    '[ "$1" = install ]' \
+    'mkdir -p "$2/bin"' \
+    'printf "%s\n" "#!/bin/sh" "exit 0" >"$2/bin/$3"' \
+    'chmod +x "$2/bin/$3"' \
+    'printf "install:%s:%s\n" "$2" "$3" >>"$INSTALL_LOG"' \
+    'printf "%s/bin/%s\n" "$2" "$3"' \
+    >"$valid_scripts/install-policy-tools.sh"
+  chmod +x "$valid_scripts"/*
+
+  run_valid_fixture() {
+    (
+      cd "$valid_root"
+      ORCHESTRATION_LOG=$orchestration_log \
+        LYCHEE_BIN=$lychee_stub \
+        ACTIONLINT_BIN=$actionlint_stub \
+        "$valid_scripts/check-repository-policy.sh" "$@"
+    )
+  }
+
+  : >"$orchestration_log"
+  all_output=$tmp_dir/orchestration-valid-all.out
+  run_valid_fixture --all ALL_HEAD --tree ALL_TREE >"$all_output" 2>&1 ||
+    fail 'valid --all orchestration fixture was rejected'
+  rg -Fqx 'repository policy: ok' "$all_output" ||
+    fail 'valid --all orchestration did not report repository policy: ok'
+  printf '%s\n' \
+    'fixture:tools' \
+    'fixture:dco' \
+    'fixture:history' \
+    'fixture:links' \
+    'fixture:workflow' \
+    'fixture:external' \
+    'fixture:baseline' \
+    'fixture:orchestration' \
+    'fixture:yaml' \
+    'baseline' \
+    'dco:--all ALL_HEAD' \
+    "links:--revision ALL_TREE --lychee $lychee_stub" \
+    "yaml:$valid_root" \
+    "workflow:--root $valid_root --actionlint $actionlint_stub" \
+    'history:ALL_TREE' \
+    >"$tmp_dir/orchestration-valid-all.expected"
+  if ! cmp -s \
+    "$tmp_dir/orchestration-valid-all.expected" "$orchestration_log"; then
+    diff -u \
+      "$tmp_dir/orchestration-valid-all.expected" \
+      "$orchestration_log" >&2 || true
+    fail 'valid --all orchestration checks or arguments were out of order'
+  fi
+
+  : >"$orchestration_log"
+  range_output=$tmp_dir/orchestration-valid-range.out
+  run_valid_fixture \
+    --range RANGE_BASE RANGE_HEAD --tree RANGE_TREE \
+    >"$range_output" 2>&1 ||
+    fail 'valid --range orchestration fixture was rejected'
+  rg -Fqx 'repository policy: ok' "$range_output" ||
+    fail 'valid --range orchestration did not report repository policy: ok'
+  printf '%s\n' \
+    'fixture:tools' \
+    'fixture:dco' \
+    'fixture:history' \
+    'fixture:links' \
+    'fixture:workflow' \
+    'fixture:external' \
+    'fixture:baseline' \
+    'fixture:orchestration' \
+    'fixture:yaml' \
+    'baseline' \
+    'dco:--range RANGE_BASE RANGE_HEAD' \
+    "links:--revision RANGE_TREE --lychee $lychee_stub" \
+    "yaml:$valid_root" \
+    "workflow:--root $valid_root --actionlint $actionlint_stub" \
+    'history:RANGE_TREE' \
+    >"$tmp_dir/orchestration-valid-range.expected"
+  if ! cmp -s \
+    "$tmp_dir/orchestration-valid-range.expected" "$orchestration_log"; then
+    diff -u \
+      "$tmp_dir/orchestration-valid-range.expected" \
+      "$orchestration_log" >&2 || true
+    fail 'valid --range orchestration checks or arguments were out of order'
+  fi
+
+  local_tool_parent=$tmp_dir/orchestration-local-tools
+  local_install_log=$tmp_dir/orchestration-local-install.log
+  mkdir -p "$local_tool_parent"
+  : >"$orchestration_log"
+  : >"$local_install_log"
+  (
+    cd "$valid_root"
+    unset LYCHEE_BIN ACTIONLINT_BIN GITHUB_ACTIONS RUNNER_TEMP
+    TMPDIR=$local_tool_parent \
+      INSTALL_LOG=$local_install_log \
+      ORCHESTRATION_LOG=$orchestration_log \
+      "$valid_scripts/check-repository-policy.sh" \
+      --all LOCAL_HEAD --tree LOCAL_TREE
+  ) >"$tmp_dir/orchestration-local-tools.out" 2>&1 ||
+    fail 'local orchestration tool installation was rejected'
+  local_tool_dir=$(
+    sed -n 's/^install:\(.*\):lychee$/\1/p' "$local_install_log"
+  )
+  case $local_tool_dir in
+    "$local_tool_parent"/engrammesh-policy-tools.*)
+      ;;
+    *)
+      fail 'local orchestration did not use a fresh mktemp tool directory'
+      ;;
+  esac
+  [ ! -e "$local_tool_dir" ] ||
+    fail 'local orchestration retained its temporary tool directory'
+  printf '%s\n' \
+    "install:$local_tool_dir:lychee" \
+    "install:$local_tool_dir:actionlint" \
+    >"$tmp_dir/orchestration-local-install.expected"
+  cmp -s \
+    "$tmp_dir/orchestration-local-install.expected" \
+    "$local_install_log" ||
+    fail 'local orchestration tool installation order changed'
+
+  runner_temp=$tmp_dir/orchestration-runner
+  runner_install_log=$tmp_dir/orchestration-runner-install.log
+  mkdir -p "$runner_temp"
+  : >"$orchestration_log"
+  : >"$runner_install_log"
+  (
+    cd "$valid_root"
+    unset LYCHEE_BIN ACTIONLINT_BIN
+    GITHUB_ACTIONS=true \
+      RUNNER_TEMP=$runner_temp \
+      INSTALL_LOG=$runner_install_log \
+      ORCHESTRATION_LOG=$orchestration_log \
+      "$valid_scripts/check-repository-policy.sh" \
+      --all RUNNER_HEAD --tree RUNNER_TREE
+  ) >"$tmp_dir/orchestration-runner-tools.out" 2>&1 ||
+    fail 'Actions orchestration tool installation was rejected'
+  printf '%s\n' \
+    "install:$runner_temp/policy-tools:lychee" \
+    "install:$runner_temp/policy-tools:actionlint" \
+    >"$tmp_dir/orchestration-runner-install.expected"
+  cmp -s \
+    "$tmp_dir/orchestration-runner-install.expected" \
+    "$runner_install_log" ||
+    fail 'Actions orchestration did not use RUNNER_TEMP/policy-tools'
+  [ -x "$runner_temp/policy-tools/bin/lychee" ] ||
+    fail 'Actions orchestration did not install Lychee'
+  [ -x "$runner_temp/policy-tools/bin/actionlint" ] ||
+    fail 'Actions orchestration did not install actionlint'
+
+  printf 'policy fixtures (orchestration): ok\n'
+}
+
+test_external_workflow() {
+  workflow_path=$repository_root/.github/workflows/external-links.yml
+  [ -s "$workflow_path" ] ||
+    fail 'external-links workflow is missing or empty'
+
+  ruby - "$workflow_path" <<'RUBY'
+require "yaml"
+
+path = ARGV.fetch(0)
+workflow = YAML.safe_load(
+  File.read(path),
+  permitted_classes: [],
+  permitted_symbols: [],
+  aliases: false
+)
+
+events = workflow.fetch("on")
+unless events.keys.sort == %w[schedule workflow_dispatch] &&
+       events.fetch("schedule") == [{ "cron" => "17 3 * * 1" }] &&
+       events.fetch("workflow_dispatch").nil?
+  abort "external-links workflow events are not weekly/manual only"
+end
+
+unless workflow["permissions"] == { "contents" => "read" }
+  abort "external-links workflow permissions changed"
+end
+unless workflow["concurrency"] == {
+  "group" => "external-links-${{ github.ref }}",
+  "cancel-in-progress" => true
+}
+  abort "external-links workflow concurrency changed"
+end
+
+job = workflow.fetch("jobs").fetch("external-links")
+unless job["name"] == "external-links" && job["runs-on"] == "ubuntu-24.04"
+  abort "external-links job identity changed"
+end
+steps = job.fetch("steps")
+checkout = steps.find { |step| step["name"] == "Check out repository" }
+unless checkout &&
+       checkout["uses"] ==
+         "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" &&
+       checkout["with"] == { "persist-credentials" => false }
+  abort "external-links checkout security settings changed"
+end
+
+install = steps.find { |step| step["name"] == "Install checksum-pinned Lychee" }
+expected_install = [
+  "set -euo pipefail",
+  './scripts/install-policy-tools.sh install "$RUNNER_TEMP/policy-tools" lychee'
+]
+unless install &&
+       install["shell"] == "bash" &&
+       install.fetch("run").lines.map(&:rstrip) == expected_install
+  abort "external-links pinned installer invocation changed"
+end
+
+check = steps.find { |step| step["name"] == "Check external links" }
+loopback =
+  "(?i)^https?://(?:localhost|(?:[^./:]+\\.)*localhost|" \
+  "127(?:\\.[0-9]{1,3}){3}|\\[::1\\])" \
+  "(?::[0-9]+)?(?:/|$)"
+examples =
+  "(?i)^https?://(?:[^./:]+\\.)*" \
+  "(?:example\\.com|example\\.org|example\\.net)" \
+  "(?::[0-9]+)?(?:/|$)"
+reserved =
+  "(?i)^https?://(?:[^./:]+\\.)*" \
+  "(?:example|invalid|localhost|test)" \
+  "(?::[0-9]+)?(?:/|$)"
+advisory =
+  "^https://github\\.com/EngramMesh/EngramMesh/security/advisories/new$"
+expected_check = [
+  "set -euo pipefail",
+  '"$RUNNER_TEMP/policy-tools/bin/lychee" \\',
+  "  --no-progress \\",
+  "  --max-retries 2 \\",
+  "  --timeout 20 \\",
+  "  --exclude '#{loopback}' \\",
+  "  --exclude '#{examples}' \\",
+  "  --exclude '#{reserved}' \\",
+  "  --exclude '#{advisory}' \\",
+  "  './**/*.md'"
+]
+unless check &&
+       check["shell"] == "bash" &&
+       check.fetch("run").lines.map(&:rstrip) == expected_check
+  abort "external-links Lychee arguments changed"
+end
+
+exclusions = [loopback, examples, reserved, advisory].map { |pattern| Regexp.new(pattern) }
+excluded_urls = [
+  "http://localhost/",
+  "HTTP://LOCALHOST:8080/path",
+  "https://service.LocalHost:9443/",
+  "http://127.0.0.1/",
+  "https://127.255.255.255:65535/path",
+  "http://[::1]/",
+  "https://[::1]:8443/path",
+  "https://example.com/",
+  "http://docs.EXAMPLE.org:8080/path",
+  "https://a.b.example.net/",
+  "https://example/",
+  "http://service.invalid:3000/path",
+  "https://LOCALHOST/",
+  "http://subdomain.test:80/",
+  "https://github.com/EngramMesh/EngramMesh/security/advisories/new"
+]
+excluded_urls.each do |url|
+  abort "external-links exclusions missed #{url}" unless exclusions.any? { |pattern| pattern.match?(url) }
+end
+if exclusions.any? { |pattern| pattern.match?("https://www.openai.com/") }
+  abort "external-links exclusions matched a normal public domain"
+end
+RUBY
+
+  printf 'policy fixtures (external workflow): ok\n'
+}
+
+test_baseline() {
+  validator=$script_dir/check-repository-baseline.sh
+  baseline_root=$tmp_dir/baseline-fixture
+  mkdir -p "$baseline_root"
+  git -C "$repository_root" archive HEAD | tar -x -C "$baseline_root"
+  mkdir -p "$baseline_root/.github/workflows"
+
+  policy_files='
+scripts/install-policy-tools.sh
+scripts/check-dco.sh
+scripts/check-markdown-links.sh
+scripts/check-community-yaml.rb
+scripts/check-private-history.sh
+scripts/check-workflow-policy.rb
+scripts/test-repository-policy.sh
+scripts/check-repository-policy.sh
+.github/workflows/repository-policy.yml
+.github/workflows/external-links.yml
+'
+  policy_executables='
+scripts/install-policy-tools.sh
+scripts/check-dco.sh
+scripts/check-markdown-links.sh
+scripts/check-community-yaml.rb
+scripts/check-private-history.sh
+scripts/check-workflow-policy.rb
+scripts/test-repository-policy.sh
+scripts/check-repository-policy.sh
+'
+
+  for path in $policy_files; do
+    cp "$repository_root/$path" "$baseline_root/$path"
+  done
+  printf '\n%s\n%s\n' \
+    'Maintainers integrate pull requests with Rebase and Merge so each validated' \
+    'DCO trailer remains in the main history. Squash Merge and Merge Commit are not used.' \
+    >>"$baseline_root/CONTRIBUTING.md"
+  cp "$validator" "$baseline_root/scripts/check-repository-baseline.sh"
+  chmod +x "$baseline_root/scripts"/*
+
+  git -C "$baseline_root" \
+    -c core.hooksPath=/dev/null \
+    -c commit.gpgsign=false \
+    init --quiet --template="$tmp_dir/empty-template"
+  git -C "$baseline_root" add .
+
+  run_baseline_validator() {
+    (
+      cd "$baseline_root"
+      ./scripts/check-repository-baseline.sh
+    )
+  }
+
+  run_baseline_validator ||
+    fail 'complete repository baseline fixture was rejected'
+
+  awk '{ printf "%s\r\n", $0 }' "$baseline_root/CONTRIBUTING.md" \
+    >"$tmp_dir/contributing-crlf.md"
+  mv "$tmp_dir/contributing-crlf.md" "$baseline_root/CONTRIBUTING.md"
+  run_baseline_validator ||
+    fail 'CRLF repository baseline fixture was rejected'
+  tr -d '\r' <"$baseline_root/CONTRIBUTING.md" \
+    >"$tmp_dir/contributing-lf.md"
+  mv "$tmp_dir/contributing-lf.md" "$baseline_root/CONTRIBUTING.md"
+
+  for path in $policy_files; do
+    rm -f "$baseline_root/$path"
+    missing_output=$tmp_dir/baseline-missing-$(printf '%s' "$path" | tr / _).out
+    capture_failure "$missing_output" run_baseline_validator ||
+      fail "baseline accepted missing policy file: $path"
+    rg -Fqx "missing or empty: $path" "$missing_output" ||
+      fail "missing policy file did not report its path: $path"
+    cp "$repository_root/$path" "$baseline_root/$path"
+  done
+
+  for path in $policy_executables; do
+    chmod -x "$baseline_root/$path"
+    mode_output=$tmp_dir/baseline-mode-$(printf '%s' "$path" | tr / _).out
+    capture_failure "$mode_output" run_baseline_validator ||
+      fail "baseline accepted non-executable policy script: $path"
+    rg -Fqx "not executable: $path" "$mode_output" ||
+      fail "non-executable policy script did not report its path: $path"
+    chmod +x "$baseline_root/$path"
+  done
+
+  awk '
+    $0 == "Maintainers integrate pull requests with Rebase and Merge so each validated" {
+      getline
+      next
+    }
+    { print }
+  ' "$baseline_root/CONTRIBUTING.md" \
+    >"$tmp_dir/contributing-without-integration-guidance.md"
+  mv "$tmp_dir/contributing-without-integration-guidance.md" \
+    "$baseline_root/CONTRIBUTING.md"
+  guidance_output=$tmp_dir/baseline-missing-integration-guidance.out
+  capture_failure "$guidance_output" run_baseline_validator ||
+    fail 'baseline accepted missing rebase-only DCO integration guidance'
+  rg -Fqx \
+    'CONTRIBUTING.md does not require rebase-only DCO integration' \
+    "$guidance_output" ||
+    fail 'missing rebase-only DCO integration guidance diagnostic changed'
+
+  printf 'policy fixtures (baseline): ok\n'
 }
 
 test_yaml() {
@@ -2544,11 +3073,20 @@ case ${1:-} in
   workflow)
     test_workflow
     ;;
+  orchestration)
+    test_orchestration
+    ;;
+  external)
+    test_external_workflow
+    ;;
+  baseline)
+    test_baseline
+    ;;
   yaml)
     test_yaml
     ;;
   *)
-    printf 'usage: %s {tools|dco|history|links|workflow|yaml}\n' "$0" >&2
+    printf 'usage: %s {tools|dco|history|links|workflow|orchestration|external|baseline|yaml}\n' "$0" >&2
     exit 2
     ;;
 esac
