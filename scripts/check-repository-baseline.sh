@@ -232,6 +232,9 @@ if ! awk '
 fi
 
 for ignored_path in \
+  .superpowers \
+  docs/superpowers \
+  docs/plans \
   .superpowers/sdd/probe \
   .superpowers/specs/probe \
   .superpowers/plans/probe \

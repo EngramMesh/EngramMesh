@@ -1,10 +1,10 @@
 # Local planning and workflow artifacts
-.superpowers/
-**/.superpowers/
-docs/superpowers/
-**/docs/superpowers/
-docs/plans/
-**/docs/plans/
+.superpowers
+**/.superpowers
+docs/superpowers
+**/docs/superpowers
+docs/plans
+**/docs/plans
 
 # Keep project documentation under version control.
 !docs/architecture/
