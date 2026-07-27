@@ -326,7 +326,7 @@ paths.each do |relative_path|
   path = File.join(root, relative_path)
   begin
     content = File.read(path)
-    ast = Psych.parse(content, path)
+    ast = Psych.parse(content)
     ast_error_count = errors.length
     inspect_yaml_ast(ast, relative_path, errors)
     next if errors.length > ast_error_count
