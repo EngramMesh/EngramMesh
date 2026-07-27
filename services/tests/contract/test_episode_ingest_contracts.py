@@ -143,11 +143,25 @@ def test_episode_authorization_denied_is_final_permission_error() -> None:
 
 
 def test_episode_authorization_denied_retains_no_sensitive_input() -> None:
+    class CommandLikePayload:
+        content_hash = "sensitive-content-hash"
+        consent_basis = "sensitive-consent-basis"
+
+    sentinel = CommandLikePayload()
+
+    with pytest.raises(TypeError):
+        EpisodeAuthorizationDenied(sentinel)
+    with pytest.raises(TypeError):
+        EpisodeAuthorizationDenied(command=sentinel)
+
     error = EpisodeAuthorizationDenied()
 
+    assert tuple(inspect.signature(EpisodeAuthorizationDenied).parameters) == ()
     assert error.args == ()
     assert vars(error) == {}
     assert not hasattr(error, "command")
+    assert sentinel not in error.args
+    assert sentinel not in vars(error).values()
 
 
 def test_memory_public_exports_episode_application_contracts() -> None:
