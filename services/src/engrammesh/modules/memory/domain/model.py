@@ -39,6 +39,26 @@ def _require_half_open_interval(
         raise ValueError(msg)
 
 
+def _freeze_schema_value(value: object, path: str = "input_schema") -> object:
+    if isinstance(value, Mapping):
+        frozen: dict[str, object] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                msg = f"{path} keys must be strings"
+                raise TypeError(msg)
+            frozen[key] = _freeze_schema_value(item, f"{path}.{key}")
+        return MappingProxyType(frozen)
+    if isinstance(value, list | tuple):
+        return tuple(
+            _freeze_schema_value(item, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        )
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    msg = f"{path} contains unsupported value type {type(value).__name__}"
+    raise TypeError(msg)
+
+
 @dataclass(frozen=True, slots=True)
 class MemoryScope:
     """Tenant and subject boundary, optionally narrowed by workspace or agent."""
@@ -216,10 +236,14 @@ class ProcedureVersion:
         if self.version <= 0:
             msg = "version must be positive"
             raise ValueError(msg)
+        input_schema = _freeze_schema_value(self.input_schema)
+        if not isinstance(input_schema, Mapping):
+            msg = "input_schema must be a mapping"
+            raise TypeError(msg)
         object.__setattr__(
             self,
             "input_schema",
-            MappingProxyType(dict(self.input_schema)),
+            input_schema,
         )
         object.__setattr__(self, "preconditions", tuple(self.preconditions))
         object.__setattr__(self, "derived_from", tuple(self.derived_from))
