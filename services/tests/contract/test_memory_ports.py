@@ -1,20 +1,28 @@
 import inspect
+from collections.abc import Mapping
 from dataclasses import MISSING, FrozenInstanceError, fields, is_dataclass
 from datetime import datetime
 from types import TracebackType
-from typing import get_type_hints
+from typing import get_protocol_members, get_type_hints
 
 import pytest
 
 from engrammesh.modules.memory import ports
 from engrammesh.modules.memory.domain.model import (
+    ApprovalStatus,
     Claim,
+    ClaimStatus,
     Episode,
+    EpistemicKind,
     EvidenceItem,
     EvidencePacket,
     EvidenceRef,
     MemoryScope,
     ProcedureVersion,
+    RetentionClass,
+    Sensitivity,
+    SourceType,
+    TemporalStatus,
 )
 from engrammesh.modules.memory.ports import (
     AppendResult,
@@ -33,6 +41,8 @@ from engrammesh.modules.memory.ports import (
 )
 from engrammesh.modules.memory.public import __all__ as public_exports
 from engrammesh.shared.kernel.ids import (
+    AgentInstanceId,
+    ArtifactId,
     MemoryId,
     SubjectId,
     TenantId,
@@ -60,93 +70,101 @@ EXPECTED_METHODS = {
     MemoryUnitOfWork: ("__aenter__", "__aexit__", "commit"),
 }
 
+EXPECTED_PROTOCOL_MEMBERS = {
+    protocol: frozenset(method_names)
+    for protocol, method_names in EXPECTED_METHODS.items()
+}
+EXPECTED_PROTOCOL_MEMBERS[MemoryUnitOfWork] = frozenset(
+    {"__aenter__", "__aexit__", "episodes", "claims", "commit"}
+)
+
 DATACLASS_SHAPES = {
     MemoryScope: (
-        ("tenant_id", MISSING),
-        ("subject_id", MISSING),
-        ("workspace_id", None),
-        ("agent_id", None),
+        ("tenant_id", TenantId, MISSING),
+        ("subject_id", SubjectId, MISSING),
+        ("workspace_id", str | None, None),
+        ("agent_id", AgentInstanceId | None, None),
     ),
     Episode: (
-        ("id", MISSING),
-        ("scope", MISSING),
-        ("actor_id", MISSING),
-        ("source_type", MISSING),
-        ("content_ref", MISSING),
-        ("observed_at", MISSING),
-        ("ingested_at", MISSING),
-        ("content_hash", MISSING),
-        ("idempotency_key", MISSING),
-        ("sensitivity", MISSING),
-        ("retention_class", MISSING),
-        ("consent_basis", MISSING),
+        ("id", MemoryId, MISSING),
+        ("scope", MemoryScope, MISSING),
+        ("actor_id", SubjectId, MISSING),
+        ("source_type", SourceType, MISSING),
+        ("content_ref", ArtifactId, MISSING),
+        ("observed_at", datetime, MISSING),
+        ("ingested_at", datetime, MISSING),
+        ("content_hash", str, MISSING),
+        ("idempotency_key", str, MISSING),
+        ("sensitivity", Sensitivity, MISSING),
+        ("retention_class", RetentionClass, MISSING),
+        ("consent_basis", str, MISSING),
     ),
     EvidenceRef: (
-        ("episode_id", MISSING),
-        ("source_span", MISSING),
-        ("extractor_version", MISSING),
-        ("model_ref", None),
-        ("prompt_version", None),
+        ("episode_id", MemoryId, MISSING),
+        ("source_span", str, MISSING),
+        ("extractor_version", str, MISSING),
+        ("model_ref", str | None, None),
+        ("prompt_version", str | None, None),
     ),
     Claim: (
-        ("id", MISSING),
-        ("scope", MISSING),
-        ("subject", MISSING),
-        ("predicate", MISSING),
-        ("object_value", MISSING),
-        ("polarity", MISSING),
-        ("epistemic_kind", MISSING),
-        ("confidence", MISSING),
-        ("valid_from", MISSING),
-        ("valid_to", MISSING),
-        ("recorded_from", MISSING),
-        ("recorded_to", MISSING),
-        ("status", MISSING),
-        ("evidence", MISSING),
+        ("id", MemoryId, MISSING),
+        ("scope", MemoryScope, MISSING),
+        ("subject", str, MISSING),
+        ("predicate", str, MISSING),
+        ("object_value", str, MISSING),
+        ("polarity", bool, MISSING),
+        ("epistemic_kind", EpistemicKind, MISSING),
+        ("confidence", float, MISSING),
+        ("valid_from", datetime, MISSING),
+        ("valid_to", datetime | None, MISSING),
+        ("recorded_from", datetime, MISSING),
+        ("recorded_to", datetime | None, MISSING),
+        ("status", ClaimStatus, MISSING),
+        ("evidence", tuple[EvidenceRef, ...], MISSING),
     ),
     ProcedureVersion: (
-        ("id", MISSING),
-        ("version", MISSING),
-        ("content_ref", MISSING),
-        ("input_schema", MISSING),
-        ("preconditions", MISSING),
-        ("evaluation_score", MISSING),
-        ("approval_status", MISSING),
-        ("derived_from", MISSING),
-        ("created_by", MISSING),
+        ("id", MemoryId, MISSING),
+        ("version", int, MISSING),
+        ("content_ref", ArtifactId, MISSING),
+        ("input_schema", Mapping[str, object], MISSING),
+        ("preconditions", tuple[str, ...], MISSING),
+        ("evaluation_score", float | None, MISSING),
+        ("approval_status", ApprovalStatus, MISSING),
+        ("derived_from", tuple[MemoryId, ...], MISSING),
+        ("created_by", SubjectId, MISSING),
     ),
     EvidenceItem: (
-        ("claim", MISSING),
-        ("temporal_status", MISSING),
-        ("lexical_score", 0.0),
-        ("semantic_score", 0.0),
-        ("temporal_score", 0.0),
-        ("graph_score", 0.0),
-        ("rerank_score", 0.0),
+        ("claim", Claim, MISSING),
+        ("temporal_status", TemporalStatus, MISSING),
+        ("lexical_score", float, 0.0),
+        ("semantic_score", float, 0.0),
+        ("temporal_score", float, 0.0),
+        ("graph_score", float, 0.0),
+        ("rerank_score", float, 0.0),
     ),
     EvidencePacket: (
-        ("query_id", MISSING),
-        ("items", MISSING),
-        ("generated_at", MISSING),
+        ("query_id", str, MISSING),
+        ("items", tuple[EvidenceItem, ...], MISSING),
+        ("generated_at", datetime, MISSING),
     ),
     MemoryQuery: (
-        ("scope", MISSING),
-        ("text", MISSING),
-        ("valid_at", None),
-        ("recorded_at", None),
-        ("limit", 10),
+        ("scope", MemoryScope, MISSING),
+        ("text", str, MISSING),
+        ("valid_at", datetime | None, None),
+        ("recorded_at", datetime | None, None),
+        ("limit", int, 10),
     ),
     AppendResult: (
-        ("episode_id", MISSING),
-        ("created", MISSING),
+        ("episode_id", MemoryId, MISSING),
+        ("created", bool, MISSING),
     ),
-    ClaimProposal: (("claim", MISSING),),
-    CandidateSet: (("items", MISSING),),
+    ClaimProposal: (("claim", Claim, MISSING),),
+    CandidateSet: (("items", tuple[EvidenceItem, ...], MISSING),),
     AuthorizationRequest: (
-        ("actor_id", MISSING),
-        ("scope", MISSING),
-        ("action", MISSING),
-        ("sensitivity", MISSING),
+        ("actor_id", SubjectId, MISSING),
+        ("scope", MemoryScope, MISSING),
+        ("action", str, MISSING),
+        ("sensitivity", Sensitivity, MISSING),
     ),
 }
 
@@ -280,18 +298,20 @@ def test_all_port_methods_are_coroutine_functions(
 )
 def test_dataclass_fields_have_exact_names_order_and_defaults(
     contract: type[object],
-    expected_fields: tuple[tuple[str, object], ...],
+    expected_fields: tuple[tuple[str, object, object], ...],
 ) -> None:
     actual_fields = fields(contract)
+    type_hints = get_type_hints(contract)
 
     assert tuple(field.name for field in actual_fields) == tuple(
-        name for name, _ in expected_fields
+        name for name, _, _ in expected_fields
     )
-    for field, (_, expected_default) in zip(
+    for field, (_, expected_annotation, expected_default) in zip(
         actual_fields,
         expected_fields,
         strict=True,
     ):
+        assert type_hints[field.name] == expected_annotation
         if expected_default is MISSING:
             assert field.default is MISSING
         else:
@@ -331,23 +351,13 @@ def test_protocol_methods_have_exact_signatures(
 
 @pytest.mark.parametrize(
     ("protocol", "expected_members"),
-    [
-        (protocol, frozenset(method_names))
-        for protocol, method_names in EXPECTED_METHODS.items()
-    ],
+    EXPECTED_PROTOCOL_MEMBERS.items(),
 )
-def test_protocols_have_no_extra_public_methods(
+def test_protocols_have_exact_members(
     protocol: type[object],
     expected_members: frozenset[str],
 ) -> None:
-    public_methods = {
-        name
-        for name, member in vars(protocol).items()
-        if inspect.isfunction(member)
-        and (not name.startswith("_") or name in {"__aenter__", "__aexit__"})
-    }
-
-    assert public_methods == expected_members
+    assert get_protocol_members(protocol) == expected_members
 
 
 def test_storage_and_search_methods_are_explicitly_scoped() -> None:
