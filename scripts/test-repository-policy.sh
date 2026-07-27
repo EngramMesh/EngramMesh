@@ -616,27 +616,100 @@ notes.md'
   commit_history_file .superpowers/private.md private
   immutable_private_sha=$(fixture_git rev-parse HEAD)
   fixture_git branch moving-ref "$immutable_safe_sha"
+  immutable_real_git=$(command -v git)
+  case $immutable_real_git in
+    /*)
+      ;;
+    *)
+      fail 'immutable history real Git path is not absolute'
+      ;;
+  esac
+  [ -x "$immutable_real_git" ] ||
+    fail 'immutable history real Git path is not executable'
   immutable_git_dir=$tmp_dir/immutable-git-bin
+  immutable_wrapper_count=$tmp_dir/immutable-git-wrapper.count
+  immutable_wrapper_guard=$tmp_dir/immutable-git-wrapper.guard
   mkdir -p "$immutable_git_dir"
   # shellcheck disable=SC2016 # Variables belong to the generated wrapper.
   printf '%s\n' \
     '#!/bin/sh' \
+    'set -eu' \
+    'printf "invoke\n" >>"$TASK6_WRAPPER_COUNT"' \
+    'guard_failure() {' \
+    '  printf "%s\n" "$1" >>"$TASK6_WRAPPER_GUARD"' \
+    '  printf "%s\n" "$1" >&2' \
+    '  exit 70' \
+    '}' \
+    'case $TASK6_REAL_GIT in' \
+    '  /*) ;;' \
+    '  *) guard_failure "immutable history Git wrapper recursion guard: real Git path is not absolute" ;;' \
+    'esac' \
+    '[ -x "$TASK6_REAL_GIT" ] ||' \
+    '  guard_failure "immutable history Git wrapper recursion guard: real Git is not executable"' \
+    '[ "$TASK6_REAL_GIT" != "$0" ] ||' \
+    '  guard_failure "immutable history Git wrapper recursion guard: real Git resolves to wrapper"' \
+    'if [ "${TASK6_GIT_WRAPPER_ACTIVE:-0}" = 1 ]; then' \
+    '  guard_failure "immutable history Git wrapper recursion detected"' \
+    'fi' \
+    'TASK6_GIT_WRAPPER_ACTIVE=1' \
+    'export TASK6_GIT_WRAPPER_ACTIVE' \
     'if [ "$1" = rev-parse ]; then' \
-    '  "$TASK6_REAL_GIT" "$@"' \
+    '  resolved=$("$TASK6_REAL_GIT" "$@")' \
     '  "$TASK6_REAL_GIT" branch -f moving-ref "$TASK6_PRIVATE_SHA" >/dev/null' \
+    '  printf "%s\n" "$resolved"' \
     '  exit 0' \
     'fi' \
     'exec "$TASK6_REAL_GIT" "$@"' \
     >"$immutable_git_dir/git"
   chmod +x "$immutable_git_dir/git"
-  (
+  immutable_restricted_bin=$tmp_dir/immutable-restricted-bin
+  mkdir -p "$immutable_restricted_bin"
+  for immutable_utility in mktemp rm ruby uname; do
+    immutable_utility_path=$(command -v "$immutable_utility")
+    case $immutable_utility_path in
+      /*)
+        ;;
+      *)
+        fail "immutable history utility path is not absolute: $immutable_utility"
+        ;;
+    esac
+    [ -x "$immutable_utility_path" ] ||
+      fail "immutable history utility is not executable: $immutable_utility"
+    ln -s "$immutable_utility_path" \
+      "$immutable_restricted_bin/$immutable_utility"
+  done
+  immutable_dash=$(command -v dash)
+  case $immutable_dash in
+    /*)
+      ;;
+    *)
+      fail 'dash path is not absolute'
+      ;;
+  esac
+  [ -x "$immutable_dash" ] || fail 'dash is not executable'
+  immutable_validator_output=$tmp_dir/immutable-validator.out
+  if ! (
     cd "$fixture_repo"
-    PATH="$immutable_git_dir:$PATH" \
-      TASK6_REAL_GIT=$(command -v git) \
+    PATH="$immutable_git_dir:$immutable_restricted_bin" \
+      TASK6_REAL_GIT=$immutable_real_git \
       TASK6_PRIVATE_SHA=$immutable_private_sha \
-      "$validator" moving-ref
-  ) ||
-    fail 'validated revision was not held as an immutable commit ID'
+      TASK6_WRAPPER_COUNT=$immutable_wrapper_count \
+      TASK6_WRAPPER_GUARD=$immutable_wrapper_guard \
+      "$immutable_dash" "$validator" moving-ref
+  ) >"$immutable_validator_output" 2>&1; then
+    if [ -s "$immutable_wrapper_guard" ]; then
+      cat "$immutable_wrapper_guard" >&2
+    fi
+    cat "$immutable_validator_output" >&2
+    fail 'immutable history fixture failed under dash with restricted PATH'
+  fi
+  immutable_wrapper_invocations=$(
+    wc -l <"$immutable_wrapper_count" | tr -d '[:space:]'
+  )
+  [ "$immutable_wrapper_invocations" -eq 3 ] ||
+    fail "immutable history Git wrapper invocation count changed: $immutable_wrapper_invocations"
+  [ "$(fixture_git rev-parse moving-ref)" = "$immutable_private_sha" ] ||
+    fail 'immutable history fixture did not move its reference'
 
   audit_git_dir=$tmp_dir/audit-git-bin
   mkdir -p "$audit_git_dir"
