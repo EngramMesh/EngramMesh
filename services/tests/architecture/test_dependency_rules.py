@@ -61,8 +61,10 @@ def _dependency_violations(
             if target == "engrammesh.shared.kernel" or target.startswith("engrammesh.shared.kernel."):
                 continue
             module_prefix = "engrammesh.modules."
-            if owning_module is not None and target.startswith(f"{module_prefix}{owning_module}."):
-                continue
+            if owning_module is not None:
+                own_domain = f"{module_prefix}{owning_module}.domain"
+                if target == own_domain or target.startswith(f"{own_domain}."):
+                    continue
             if target.startswith(module_prefix):
                 violations.append(f"{source}: imports another module's internals: {target}")
             else:
@@ -95,3 +97,16 @@ def test_dependency_rules_reject_another_modules_internals(tmp_path: Path) -> No
     violations = _dependency_violations([source], source_root)
 
     assert any("another module's internals" in item for item in violations)
+
+
+def test_dependency_rules_reject_owning_module_adapters(tmp_path: Path) -> None:
+    source_root = tmp_path / "src"
+    source = source_root / "engrammesh" / "modules" / "memory" / "domain" / "model.py"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "from engrammesh.modules.memory.adapters import MemoryRepository\n",
+        encoding="utf-8",
+    )
+    violations = _dependency_violations([source], source_root)
+
+    assert any("engrammesh.modules.memory.adapters" in item for item in violations)
