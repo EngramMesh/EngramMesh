@@ -6,7 +6,9 @@
 
 ## Status
 
-Architecture approved; product implementation has not started.
+The tested architecture scaffold has started; no runtime adapter or product
+feature is implemented. See the [English services architecture-code
+guide](services/README.md).
 
 ## Why EngramMesh
 
