@@ -101,6 +101,7 @@ DATACLASS_SHAPES = {
     ),
     ExecutionSnapshot: (
         ("execution_id", ExecutionId, MISSING),
+        ("scope", MemoryScope, MISSING),
         ("revision", int, MISSING),
         ("status", ExecutionStatus, MISSING),
         ("plan_revision", int | None, MISSING),
@@ -227,12 +228,17 @@ PROTOCOL_SIGNATURES = {
         ExecutionSnapshot,
     ),
     OrchestratorPort.get_snapshot: (
-        (("self", EMPTY, EMPTY), ("execution_id", ExecutionId, EMPTY)),
+        (
+            ("self", EMPTY, EMPTY),
+            ("scope", MemoryScope, EMPTY),
+            ("execution_id", ExecutionId, EMPTY),
+        ),
         ExecutionSnapshot,
     ),
     OrchestratorPort.cancel: (
         (
             ("self", EMPTY, EMPTY),
+            ("scope", MemoryScope, EMPTY),
             ("execution_id", ExecutionId, EMPTY),
             ("idempotency_key", str, EMPTY),
         ),
@@ -417,6 +423,11 @@ def test_port_methods_have_exact_framework_neutral_signatures() -> None:
             for name, annotation, default in expected_parameters
         )
         assert signature.return_annotation == expected_return
+
+
+def test_orchestrator_reads_and_cancellation_are_explicitly_tenant_scoped() -> None:
+    assert get_type_hints(OrchestratorPort.get_snapshot)["scope"] is MemoryScope
+    assert get_type_hints(OrchestratorPort.cancel)["scope"] is MemoryScope
 
 
 def test_runtime_contracts_import_memory_only_through_its_public_api() -> None:

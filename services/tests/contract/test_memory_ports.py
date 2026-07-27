@@ -144,10 +144,12 @@ DATACLASS_SHAPES = {
     ),
     EvidencePacket: (
         ("query_id", str, MISSING),
+        ("scope", MemoryScope, MISSING),
         ("items", tuple[EvidenceItem, ...], MISSING),
         ("generated_at", datetime, MISSING),
     ),
     MemoryQuery: (
+        ("query_id", str, MISSING),
         ("scope", MemoryScope, MISSING),
         ("text", str, MISSING),
         ("valid_at", datetime | None, None),
@@ -159,7 +161,10 @@ DATACLASS_SHAPES = {
         ("created", bool, MISSING),
     ),
     ClaimProposal: (("claim", Claim, MISSING),),
-    CandidateSet: (("items", tuple[EvidenceItem, ...], MISSING),),
+    CandidateSet: (
+        ("scope", MemoryScope, MISSING),
+        ("items", tuple[EvidenceItem, ...], MISSING),
+    ),
     AuthorizationRequest: (
         ("actor_id", SubjectId, MISSING),
         ("scope", MemoryScope, MISSING),
@@ -424,22 +429,25 @@ def test_port_dtos_are_frozen_slotted_dataclasses(dto: type[object]) -> None:
     assert "__slots__" in dto.__dict__
 
 
-def test_query_validates_scope_text_time_and_limit() -> None:
+def test_query_validates_correlation_scope_text_time_and_limit() -> None:
     scope = MemoryScope(
         tenant_id=TenantId.new(),
         subject_id=SubjectId.new(),
     )
 
+    with pytest.raises(ValueError, match="query_id"):
+        MemoryQuery(query_id=" ", scope=scope, text="tea")
     with pytest.raises(ValueError, match="text"):
-        MemoryQuery(scope=scope, text=" ")
+        MemoryQuery(query_id="query-1", scope=scope, text=" ")
     with pytest.raises(ValueError, match="valid_at"):
         MemoryQuery(
+            query_id="query-1",
             scope=scope,
             text="tea",
             valid_at=datetime(2026, 7, 27, 10, 0),  # noqa: DTZ001
         )
     with pytest.raises(ValueError, match="limit"):
-        MemoryQuery(scope=scope, text="tea", limit=0)
+        MemoryQuery(query_id="query-1", scope=scope, text="tea", limit=0)
 
 
 def test_port_dtos_are_immutable() -> None:
@@ -461,6 +469,18 @@ def test_application_ports_have_exact_request_shapes() -> None:
         "candidates"
     ] is CandidateSet
     assert get_type_hints(MemoryRerankerPort.rerank)["return"] is EvidencePacket
+
+
+def test_reranker_contract_carries_query_correlation_and_scope_end_to_end() -> None:
+    query_hints = get_type_hints(MemoryQuery)
+    candidate_hints = get_type_hints(CandidateSet)
+    packet_hints = get_type_hints(EvidencePacket)
+
+    assert query_hints["query_id"] is str
+    assert query_hints["scope"] is MemoryScope
+    assert candidate_hints["scope"] is MemoryScope
+    assert packet_hints["query_id"] is str
+    assert packet_hints["scope"] is MemoryScope
 
 
 def test_public_surface_exports_only_supported_contracts() -> None:

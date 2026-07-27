@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 from types import MappingProxyType
@@ -55,6 +56,65 @@ def test_event_envelope_copies_payload_into_immutable_mapping() -> None:
     assert envelope.payload == {"memory_type": "episodic"}
     with pytest.raises(TypeError):
         envelope.payload["memory_type"] = "procedural"  # type: ignore[index]
+
+
+def test_event_envelope_recursively_copies_nested_json_containers() -> None:
+    source = {
+        "memory": {
+            "tags": ["episodic", {"source": "user"}],
+        }
+    }
+    envelope = EventEnvelope(**envelope_values(payload=source))
+
+    source["memory"]["tags"].append("semantic")
+    source["memory"]["tags"][1]["source"] = "agent"
+
+    assert envelope.payload == {
+        "memory": {
+            "tags": ("episodic", {"source": "user"}),
+        }
+    }
+
+
+def test_event_envelope_exposes_only_recursively_immutable_containers() -> None:
+    envelope = EventEnvelope(
+        **envelope_values(
+            payload={
+                "memory": {
+                    "tags": ["episodic", {"source": "user"}],
+                }
+            }
+        )
+    )
+    memory = envelope.payload["memory"]
+    assert isinstance(memory, Mapping)
+    tags = memory["tags"]
+    assert isinstance(tags, tuple)
+    source = tags[1]
+    assert isinstance(source, Mapping)
+
+    with pytest.raises(TypeError):
+        memory["tags"] = ()  # type: ignore[index]
+    with pytest.raises(TypeError):
+        tags[0] = "semantic"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        source["source"] = "agent"  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {"tags": {"episodic", "semantic"}},
+        {"lookup": {1: "episodic"}},
+        {"score": float("nan")},
+        {"score": float("inf")},
+    ),
+)
+def test_event_envelope_rejects_non_json_payload_values(
+    payload: dict[object, object],
+) -> None:
+    with pytest.raises((TypeError, ValueError), match="payload"):
+        EventEnvelope(**envelope_values(payload=payload))
 
 
 def test_event_envelope_preserves_absent_causation_id() -> None:

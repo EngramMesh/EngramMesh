@@ -30,6 +30,7 @@ def _require_optional_aware(value: datetime | None, field_name: str) -> None:
 class MemoryQuery:
     """Scoped request for cognitive-memory evidence."""
 
+    query_id: str
     scope: MemoryScope
     text: str
     valid_at: datetime | None = None
@@ -37,6 +38,9 @@ class MemoryQuery:
     limit: int = 10
 
     def __post_init__(self) -> None:
+        if not self.query_id.strip():
+            msg = "query_id must not be blank"
+            raise ValueError(msg)
         if not self.text.strip():
             msg = "text must not be blank"
             raise ValueError(msg)
@@ -66,10 +70,15 @@ class ClaimProposal:
 class CandidateSet:
     """Immutable candidate evidence returned by an index."""
 
+    scope: MemoryScope
     items: tuple[EvidenceItem, ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "items", tuple(self.items))
+        items = tuple(self.items)
+        if any(item.claim.scope != self.scope for item in items):
+            msg = "every evidence item claim scope must match candidate scope"
+            raise ValueError(msg)
+        object.__setattr__(self, "items", items)
 
 
 @dataclass(frozen=True, slots=True)
