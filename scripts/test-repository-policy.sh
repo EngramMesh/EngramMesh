@@ -60,7 +60,7 @@ test_tools() {
   capture_failure "$invalid_digest_output" \
     "$installer" verify-sha256 "$checksum_fixture" not-a-sha256 ||
     fail 'verify-sha256 accepted a malformed digest'
-  rg -q 'invalid SHA-256 digest' "$invalid_digest_output" ||
+  grep -Fq 'invalid SHA-256 digest' "$invalid_digest_output" ||
     fail 'malformed digest did not report invalid SHA-256 digest'
 
   mismatch_output=$tmp_dir/checksum-mismatch.out
@@ -68,7 +68,7 @@ test_tools() {
     "$installer" verify-sha256 "$checksum_fixture" \
     0000000000000000000000000000000000000000000000000000000000000000 ||
     fail 'verify-sha256 accepted an incorrect digest'
-  rg -q 'SHA-256 mismatch' "$mismatch_output" ||
+  grep -Fq 'SHA-256 mismatch' "$mismatch_output" ||
     fail 'digest mismatch did not report SHA-256 mismatch'
 
   assert_resolution "$installer" lychee Darwin arm64 \
@@ -124,7 +124,7 @@ test_tools() {
   capture_failure "$unsupported_output" \
     "$installer" resolve lychee Plan9 x86_64 ||
     fail 'resolver accepted an unsupported platform'
-  rg -q 'unsupported policy-tool platform' "$unsupported_output" ||
+  grep -Fq 'unsupported policy-tool platform' "$unsupported_output" ||
     fail 'unsupported platform did not report unsupported policy-tool platform'
 
   install_dir=$tmp_dir/installed-policy-tools
@@ -171,11 +171,11 @@ test_tools() {
     fail 'install command did not create an executable lychee'
   [ -x "$install_dir/bin/actionlint" ] ||
     fail 'install command did not create an executable actionlint'
-  "$install_dir/bin/lychee" --version | rg -q '0[.]24[.]2' ||
+  "$install_dir/bin/lychee" --version | grep -Eq '0[.]24[.]2' ||
     fail 'installed lychee did not report version 0.24.2'
-  "$install_dir/bin/actionlint" --version | rg -q '1[.]7[.]12' ||
+  "$install_dir/bin/actionlint" --version | grep -Eq '1[.]7[.]12' ||
     fail 'installed actionlint did not report version 1.7.12'
-  if find "$install_dir/download" -type f -print | rg -q .; then
+  if find "$install_dir/download" -type f -print | grep -q .; then
     fail 'install command retained a downloaded archive'
   fi
 
@@ -237,9 +237,9 @@ test_dco() {
   unsigned_output=$tmp_dir/unsigned-commit.out
   capture_failure "$unsigned_output" run_validator --all HEAD ||
     fail 'unsigned commit was accepted'
-  rg -q "$unsigned_sha" "$unsigned_output" ||
+  grep -Fq "$unsigned_sha" "$unsigned_output" ||
     fail 'unsigned commit diagnostic omitted the commit SHA'
-  rg -q 'missing Signed-off-by trailer' "$unsigned_output" ||
+  grep -Fq 'missing Signed-off-by trailer' "$unsigned_output" ||
     fail 'unsigned commit did not report missing Signed-off-by trailer'
 
   new_fixture signed-range
@@ -260,21 +260,21 @@ test_dco() {
   capture_failure "$invalid_base_output" \
     run_validator --range not-a-commit "$range_head" ||
     fail 'invalid base revision was accepted'
-  rg -q 'invalid commit revision' "$invalid_base_output" ||
+  grep -Fq 'invalid commit revision' "$invalid_base_output" ||
     fail 'invalid base revision did not report invalid commit revision'
 
   invalid_head_output=$tmp_dir/invalid-head.out
   capture_failure "$invalid_head_output" \
     run_validator --range "$range_base" not-a-commit ||
     fail 'invalid head revision was accepted'
-  rg -q 'invalid commit revision' "$invalid_head_output" ||
+  grep -Fq 'invalid commit revision' "$invalid_head_output" ||
     fail 'invalid head revision did not report invalid commit revision'
 
   empty_range_output=$tmp_dir/empty-range.out
   capture_failure "$empty_range_output" \
     run_validator --range "$range_head" "$range_head" ||
     fail 'BASE == HEAD did not report DCO range contains no commits'
-  rg -q 'DCO range contains no commits' "$empty_range_output" ||
+  grep -Fq 'DCO range contains no commits' "$empty_range_output" ||
     fail 'BASE == HEAD did not report DCO range contains no commits'
 
   new_fixture signoff-in-subject
@@ -287,9 +287,9 @@ test_dco() {
   subject_signoff_output=$tmp_dir/subject-signoff.out
   capture_failure "$subject_signoff_output" run_validator --all HEAD ||
     fail 'Signed-off-by in subject did not report missing Signed-off-by trailer'
-  rg -q "$subject_signoff_sha" "$subject_signoff_output" ||
+  grep -Fq "$subject_signoff_sha" "$subject_signoff_output" ||
     fail 'Signed-off-by in subject diagnostic omitted the commit SHA'
-  rg -q 'missing Signed-off-by trailer' "$subject_signoff_output" ||
+  grep -Fq 'missing Signed-off-by trailer' "$subject_signoff_output" ||
     fail 'Signed-off-by in subject did not report missing Signed-off-by trailer'
 
   new_fixture lowercase-signoff-key
@@ -303,9 +303,9 @@ test_dco() {
   lowercase_signoff_output=$tmp_dir/lowercase-signoff.out
   capture_failure "$lowercase_signoff_output" run_validator --all HEAD ||
     fail 'lowercase sign-off key did not report missing Signed-off-by trailer'
-  rg -q "$lowercase_signoff_sha" "$lowercase_signoff_output" ||
+  grep -Fq "$lowercase_signoff_sha" "$lowercase_signoff_output" ||
     fail 'lowercase sign-off key diagnostic omitted the commit SHA'
-  rg -q 'missing Signed-off-by trailer' "$lowercase_signoff_output" ||
+  grep -Fq 'missing Signed-off-by trailer' "$lowercase_signoff_output" ||
     fail 'lowercase sign-off key did not report missing Signed-off-by trailer'
 
   new_fixture miscased-signoff-key
@@ -319,9 +319,9 @@ test_dco() {
   miscased_signoff_output=$tmp_dir/miscased-signoff.out
   capture_failure "$miscased_signoff_output" run_validator --all HEAD ||
     fail 'miscased sign-off key did not report missing Signed-off-by trailer'
-  rg -q "$miscased_signoff_sha" "$miscased_signoff_output" ||
+  grep -Fq "$miscased_signoff_sha" "$miscased_signoff_output" ||
     fail 'miscased sign-off key diagnostic omitted the commit SHA'
-  rg -q 'missing Signed-off-by trailer' "$miscased_signoff_output" ||
+  grep -Fq 'missing Signed-off-by trailer' "$miscased_signoff_output" ||
     fail 'miscased sign-off key did not report missing Signed-off-by trailer'
 
   new_fixture exact-and-nonexact-signoff-keys
@@ -349,9 +349,9 @@ test_dco() {
   signoff_before_body_output=$tmp_dir/signoff-before-body.out
   capture_failure "$signoff_before_body_output" run_validator --all HEAD ||
     fail 'sign-off followed by body did not report missing Signed-off-by trailer'
-  rg -q "$signoff_before_body_sha" "$signoff_before_body_output" ||
+  grep -Fq "$signoff_before_body_sha" "$signoff_before_body_output" ||
     fail 'sign-off followed by body diagnostic omitted the commit SHA'
-  rg -q 'missing Signed-off-by trailer' "$signoff_before_body_output" ||
+  grep -Fq 'missing Signed-off-by trailer' "$signoff_before_body_output" ||
     fail 'sign-off followed by body did not report missing Signed-off-by trailer'
 
   new_fixture malformed-signoff
@@ -365,9 +365,9 @@ test_dco() {
   malformed_signoff_output=$tmp_dir/malformed-signoff.out
   capture_failure "$malformed_signoff_output" run_validator --all HEAD ||
     fail 'empty-name sign-off did not report invalid Signed-off-by trailer'
-  rg -q "$malformed_signoff_sha" "$malformed_signoff_output" ||
+  grep -Fq "$malformed_signoff_sha" "$malformed_signoff_output" ||
     fail 'empty-name sign-off diagnostic omitted the commit SHA'
-  rg -q 'invalid Signed-off-by trailer' "$malformed_signoff_output" ||
+  grep -Fq 'invalid Signed-off-by trailer' "$malformed_signoff_output" ||
     fail 'empty-name sign-off did not report invalid Signed-off-by trailer'
 
   new_fixture empty-signoff
@@ -381,9 +381,9 @@ test_dco() {
   empty_signoff_output=$tmp_dir/empty-signoff.out
   capture_failure "$empty_signoff_output" run_validator --all HEAD ||
     fail 'empty exact sign-off was accepted'
-  rg -q "$empty_signoff_sha" "$empty_signoff_output" ||
+  grep -Fq "$empty_signoff_sha" "$empty_signoff_output" ||
     fail 'empty exact sign-off diagnostic omitted the commit SHA'
-  rg -q 'invalid Signed-off-by trailer' "$empty_signoff_output" ||
+  grep -Fq 'invalid Signed-off-by trailer' "$empty_signoff_output" ||
     fail 'empty exact sign-off did not report invalid Signed-off-by trailer'
 
   new_fixture signoff-without-at
@@ -397,9 +397,9 @@ test_dco() {
   no_at_output=$tmp_dir/no-at-signoff.out
   capture_failure "$no_at_output" run_validator --all HEAD ||
     fail 'address without @ did not report invalid Signed-off-by trailer'
-  rg -q "$no_at_sha" "$no_at_output" ||
+  grep -Fq "$no_at_sha" "$no_at_output" ||
     fail 'address without @ diagnostic omitted the commit SHA'
-  rg -q 'invalid Signed-off-by trailer' "$no_at_output" ||
+  grep -Fq 'invalid Signed-off-by trailer' "$no_at_output" ||
     fail 'address without @ did not report invalid Signed-off-by trailer'
 
   new_fixture crlf-signoff
@@ -444,9 +444,9 @@ test_dco() {
   mixed_signoffs_output=$tmp_dir/mixed-signoffs.out
   capture_failure "$mixed_signoffs_output" run_validator --all HEAD ||
     fail 'valid plus malformed sign-off did not report invalid Signed-off-by trailer'
-  rg -q "$mixed_signoffs_sha" "$mixed_signoffs_output" ||
+  grep -Fq "$mixed_signoffs_sha" "$mixed_signoffs_output" ||
     fail 'mixed sign-off diagnostic omitted the commit SHA'
-  rg -q 'invalid Signed-off-by trailer' "$mixed_signoffs_output" ||
+  grep -Fq 'invalid Signed-off-by trailer' "$mixed_signoffs_output" ||
     fail 'valid plus malformed sign-off did not report invalid Signed-off-by trailer'
 
   new_fixture trailing-empty-signoff
@@ -461,9 +461,9 @@ test_dco() {
   trailing_empty_output=$tmp_dir/trailing-empty-signoff.out
   capture_failure "$trailing_empty_output" run_validator --all HEAD ||
     fail 'trailing empty exact sign-off did not report invalid Signed-off-by trailer'
-  rg -q "$trailing_empty_sha" "$trailing_empty_output" ||
+  grep -Fq "$trailing_empty_sha" "$trailing_empty_output" ||
     fail 'trailing empty exact sign-off diagnostic omitted the commit SHA'
-  rg -q 'invalid Signed-off-by trailer' "$trailing_empty_output" ||
+  grep -Fq 'invalid Signed-off-by trailer' "$trailing_empty_output" ||
     fail 'trailing empty exact sign-off did not report invalid Signed-off-by trailer'
 
   new_fixture unsigned-squash
@@ -485,9 +485,9 @@ test_dco() {
   capture_failure "$squash_output" \
     run_validator --range "$squash_base" "$squash_sha" ||
     fail 'synthetic unsigned squash did not report missing Signed-off-by trailer'
-  rg -q "$squash_sha" "$squash_output" ||
+  grep -Fq "$squash_sha" "$squash_output" ||
     fail 'synthetic unsigned squash diagnostic omitted the commit SHA'
-  rg -q 'missing Signed-off-by trailer' "$squash_output" ||
+  grep -Fq 'missing Signed-off-by trailer' "$squash_output" ||
     fail 'synthetic unsigned squash did not report missing Signed-off-by trailer'
 
   new_fixture two-unsigned
@@ -510,9 +510,9 @@ test_dco() {
   capture_failure "$two_unsigned_output" \
     run_validator --range "$two_unsigned_base" "$second_unsigned_sha" ||
     fail 'two unsigned commits did not report both commit SHAs'
-  rg -q "$first_unsigned_sha" "$two_unsigned_output" ||
+  grep -Fq "$first_unsigned_sha" "$two_unsigned_output" ||
     fail 'two unsigned commit diagnostic omitted the first SHA'
-  rg -q "$second_unsigned_sha" "$two_unsigned_output" ||
+  grep -Fq "$second_unsigned_sha" "$two_unsigned_output" ||
     fail 'two unsigned commit diagnostic omitted the second SHA'
 
   new_fixture control-character-subject
@@ -539,9 +539,9 @@ test_dco() {
   control_subject_output=$tmp_dir/control-subject.out
   capture_failure "$control_subject_output" run_validator --all HEAD ||
     fail 'control-character subject did not report missing Signed-off-by trailer'
-  rg -q "$control_subject_sha" "$control_subject_output" ||
+  grep -Fq "$control_subject_sha" "$control_subject_output" ||
     fail 'control-character subject diagnostic omitted the commit SHA'
-  rg -q 'missing Signed-off-by trailer' "$control_subject_output" ||
+  grep -Fq 'missing Signed-off-by trailer' "$control_subject_output" ||
     fail 'control-character subject did not report missing Signed-off-by trailer'
   sanitized_control_output=$tmp_dir/control-subject-sanitized.out
   LC_ALL=C tr -d '\000-\011\013-\037\177' \
@@ -606,7 +606,7 @@ notes.md'
   capture_failure "$invalid_history_revision_output" \
     run_history_validator not-a-commit ||
     fail 'invalid history revision was accepted'
-  rg -Fqx 'invalid commit revision: not-a-commit' \
+  grep -Fqx 'invalid commit revision: not-a-commit' \
     "$invalid_history_revision_output" ||
     fail 'invalid history revision did not report its revision'
 
@@ -671,9 +671,9 @@ notes.md'
     'private history path: .superpowers/object.md' \
     'private history path: .superpowers/shared.md' \
     'private history path: docs/plans/log.md'; do
-    rg -Fqx "$synthetic_diagnostic" "$synthetic_history_output" ||
+    grep -Fqx "$synthetic_diagnostic" "$synthetic_history_output" ||
       fail "synthetic history omitted: $synthetic_diagnostic"
-    [ "$(rg -Fxc "$synthetic_diagnostic" "$synthetic_history_output")" -eq 1 ] ||
+    [ "$(grep -Fxc "$synthetic_diagnostic" "$synthetic_history_output")" -eq 1 ] ||
       fail "synthetic history repeated: $synthetic_diagnostic"
   done
 
@@ -692,9 +692,9 @@ break.md'
   for quoted_private_diagnostic in \
     'private history path: .superpowers/秘密.md' \
     'private history path: docs/superpowers/line\nbreak.md'; do
-    rg -Fqx "$quoted_private_diagnostic" "$quoted_private_output" ||
+    grep -Fqx "$quoted_private_diagnostic" "$quoted_private_output" ||
       fail "quoted private history omitted: $quoted_private_diagnostic"
-    [ "$(rg -Fxc "$quoted_private_diagnostic" "$quoted_private_output")" -eq 1 ] ||
+    [ "$(grep -Fxc "$quoted_private_diagnostic" "$quoted_private_output")" -eq 1 ] ||
       fail "quoted private history repeated: $quoted_private_diagnostic"
   done
   [ "$(wc -l <"$quoted_private_output" | tr -d '[:space:]')" -eq 2 ] ||
@@ -724,9 +724,9 @@ break.md'
   for injective_diagnostic in \
     'private history path: .superpowers/raw-\xFF.md' \
     'private history path: .superpowers/raw-\\xFF.md'; do
-    rg -Fqx "$injective_diagnostic" "$injective_diagnostics_output" ||
+    grep -Fqx "$injective_diagnostic" "$injective_diagnostics_output" ||
       fail "byte-distinct history omitted: $injective_diagnostic"
-    [ "$(rg -Fxc "$injective_diagnostic" "$injective_diagnostics_output")" -eq 1 ] ||
+    [ "$(grep -Fxc "$injective_diagnostic" "$injective_diagnostics_output")" -eq 1 ] ||
       fail "byte-distinct history repeated: $injective_diagnostic"
   done
   [ "$(wc -l <"$injective_diagnostics_output" | tr -d '[:space:]')" -eq 2 ] ||
@@ -746,10 +746,10 @@ break.md'
   capture_failure "$deleted_superpowers_output" \
     run_history_validator HEAD ||
     fail 'deleted .superpowers history was accepted'
-  rg -Fqx 'private history path: .superpowers/spec.md' \
+  grep -Fqx 'private history path: .superpowers/spec.md' \
     "$deleted_superpowers_output" ||
     fail 'deleted .superpowers history did not report its path'
-  [ "$(rg -Fxc 'private history path: .superpowers/spec.md' \
+  [ "$(grep -Fxc 'private history path: .superpowers/spec.md' \
     "$deleted_superpowers_output")" -eq 1 ] ||
     fail 'deleted .superpowers history path was reported more than once'
 
@@ -761,7 +761,7 @@ break.md'
   capture_failure "$deleted_docs_superpowers_output" \
     run_history_validator HEAD ||
     fail 'deleted docs/superpowers history was accepted'
-  rg -Fqx 'private history path: docs/superpowers/notes.md' \
+  grep -Fqx 'private history path: docs/superpowers/notes.md' \
     "$deleted_docs_superpowers_output" ||
     fail 'deleted docs/superpowers history did not report its path'
 
@@ -773,7 +773,7 @@ break.md'
   capture_failure "$deleted_docs_plans_output" \
     run_history_validator HEAD ||
     fail 'deleted docs/plans history was accepted'
-  rg -Fqx 'private history path: docs/plans/roadmap.md' \
+  grep -Fqx 'private history path: docs/plans/roadmap.md' \
     "$deleted_docs_plans_output" ||
     fail 'deleted docs/plans history did not report its path'
 
@@ -856,7 +856,7 @@ jobs:
     fixture_output=$tmp_dir/workflow-$fixture_name.out
     capture_failure "$fixture_output" run_workflow_validator ||
       fail "$fixture_name workflow fixture was accepted"
-    rg -Fqx "$expected_diagnostic" "$fixture_output" ||
+    grep -Fqx "$expected_diagnostic" "$fixture_output" ||
       fail "$fixture_name did not report: $expected_diagnostic"
   }
 
@@ -868,7 +868,7 @@ jobs:
       "$validator" --root "$workflow_root" \
       --actionlint "$successful_actionlint_stub" ||
       fail "$fixture_name workflow fixture was accepted"
-    rg -Fqx "$expected_diagnostic" "$fixture_output" ||
+    grep -Fqx "$expected_diagnostic" "$fixture_output" ||
       fail "$fixture_name did not report: $expected_diagnostic"
   }
 
@@ -939,9 +939,9 @@ jobs:
     token_actionlint_output=$tmp_dir/workflow-token-actionlint-env-$token_variant.out
     capture_failure "$token_actionlint_output" run_workflow_validator ||
       fail "token-env-$token_variant bypassed actionlint"
-    rg -q '\[expression\]' "$token_actionlint_output" ||
+    grep -Eq '\[expression\]' "$token_actionlint_output" ||
       fail "token-env-$token_variant did not fail through actionlint"
-    rg -q 'only single quotes are available' "$token_actionlint_output" ||
+    grep -Fq 'only single quotes are available' "$token_actionlint_output" ||
       fail "token-env-$token_variant actionlint diagnostic changed"
 
     reset_workflow_fixture
@@ -949,9 +949,9 @@ jobs:
     token_actionlint_output=$tmp_dir/workflow-token-actionlint-run-$token_variant.out
     capture_failure "$token_actionlint_output" run_workflow_validator ||
       fail "token-run-$token_variant bypassed actionlint"
-    rg -q '\[expression\]' "$token_actionlint_output" ||
+    grep -Eq '\[expression\]' "$token_actionlint_output" ||
       fail "token-run-$token_variant did not fail through actionlint"
-    rg -q 'only single quotes are available' "$token_actionlint_output" ||
+    grep -Fq 'only single quotes are available' "$token_actionlint_output" ||
       fail "token-run-$token_variant actionlint diagnostic changed"
   }
 
@@ -992,7 +992,7 @@ jobs:
   invalid_expression_output=$tmp_dir/workflow-invalid-expression.out
   capture_failure "$invalid_expression_output" run_workflow_validator ||
     fail 'invalid GitHub expression was accepted'
-  rg -q '\[expression\]' "$invalid_expression_output" ||
+  grep -Eq '\[expression\]' "$invalid_expression_output" ||
     fail 'invalid GitHub expression did not fail through actionlint'
 
   reset_workflow_fixture
@@ -1280,7 +1280,7 @@ test_orchestration() {
   }
   capture_failure "$fixture_output" run_baseline_fixture ||
     fail 'deliberately failing baseline fixture was accepted'
-  rg -Fqx 'baseline fixture failure' "$fixture_output" ||
+  grep -Fqx 'baseline fixture failure' "$fixture_output" ||
     fail 'orchestrator did not reach the deliberately failing baseline'
 
   valid_root=$tmp_dir/orchestration-valid
@@ -1364,7 +1364,7 @@ test_orchestration() {
   all_output=$tmp_dir/orchestration-valid-all.out
   run_valid_fixture --all ALL_HEAD --tree ALL_TREE >"$all_output" 2>&1 ||
     fail 'valid --all orchestration fixture was rejected'
-  rg -Fqx 'repository policy: ok' "$all_output" ||
+  grep -Fqx 'repository policy: ok' "$all_output" ||
     fail 'valid --all orchestration did not report repository policy: ok'
   printf '%s\n' \
     'fixture:tools' \
@@ -1397,7 +1397,7 @@ test_orchestration() {
     --range RANGE_BASE RANGE_HEAD --tree RANGE_TREE \
     >"$range_output" 2>&1 ||
     fail 'valid --range orchestration fixture was rejected'
-  rg -Fqx 'repository policy: ok' "$range_output" ||
+  grep -Fqx 'repository policy: ok' "$range_output" ||
     fail 'valid --range orchestration did not report repository policy: ok'
   printf '%s\n' \
     'fixture:tools' \
@@ -1681,7 +1681,7 @@ scripts/check-repository-policy.sh
     missing_output=$tmp_dir/baseline-missing-$(printf '%s' "$path" | tr / _).out
     capture_failure "$missing_output" run_baseline_validator ||
       fail "baseline accepted missing policy file: $path"
-    rg -Fqx "missing or empty: $path" "$missing_output" ||
+    grep -Fqx "missing or empty: $path" "$missing_output" ||
       fail "missing policy file did not report its path: $path"
     cp "$repository_root/$path" "$baseline_root/$path"
   done
@@ -1691,10 +1691,54 @@ scripts/check-repository-policy.sh
     mode_output=$tmp_dir/baseline-mode-$(printf '%s' "$path" | tr / _).out
     capture_failure "$mode_output" run_baseline_validator ||
       fail "baseline accepted non-executable policy script: $path"
-    rg -Fqx "not executable: $path" "$mode_output" ||
+    grep -Fqx "not executable: $path" "$mode_output" ||
       fail "non-executable policy script did not report its path: $path"
     chmod +x "$baseline_root/$path"
   done
+
+  assert_ripgrep_command_rejected() {
+    fixture_name=$1
+    fixture_command=$2
+    printf '%s\n' "$fixture_command" \
+      >>"$baseline_root/scripts/check-dco.sh"
+    ripgrep_output=$tmp_dir/baseline-ripgrep-$fixture_name.out
+    capture_failure "$ripgrep_output" run_baseline_validator ||
+      fail "baseline accepted ripgrep command spelling: $fixture_name"
+    grep -Fqx \
+      'public policy files must not invoke ripgrep' \
+      "$ripgrep_output" ||
+      fail "public ripgrep dependency diagnostic changed: $fixture_name"
+    cp "$repository_root/scripts/check-dco.sh" \
+      "$baseline_root/scripts/check-dco.sh"
+    chmod +x "$baseline_root/scripts/check-dco.sh"
+  }
+
+  direct_ripgrep_command=r'g -q forbidden-runtime-dependency README.md'
+  single_quote_ripgrep_command="r''g -q forbidden-runtime-dependency README.md"
+  double_quote_ripgrep_command='r""g -q forbidden-runtime-dependency README.md'
+  separator_ripgrep_command=':; r""g -q forbidden-runtime-dependency README.md'
+  prefixed_ripgrep_command="if POLICY_MODE=test command r''g -q forbidden-runtime-dependency README.md"
+  assert_ripgrep_command_rejected direct "$direct_ripgrep_command"
+  assert_ripgrep_command_rejected \
+    adjacent-single-quotes "$single_quote_ripgrep_command"
+  assert_ripgrep_command_rejected \
+    adjacent-double-quotes "$double_quote_ripgrep_command"
+  assert_ripgrep_command_rejected \
+    after-separator "$separator_ripgrep_command"
+  assert_ripgrep_command_rejected \
+    keyword-assignment-command-prefix "$prefixed_ripgrep_command"
+
+  {
+    printf '%s%s\n' '# r' 'g is harmless fixture prose'
+    printf '%s%s\n' "echo 'r" "g is prose'"
+    printf '%s%s\n' "fixture_data='r" "g'"
+    printf '%s%s\n' "printf '%s\n' 'r" "g is data'"
+  } >>"$baseline_root/scripts/check-dco.sh"
+  run_baseline_validator ||
+    fail 'baseline rejected harmless ripgrep comments, prose, or data'
+  cp "$repository_root/scripts/check-dco.sh" \
+    "$baseline_root/scripts/check-dco.sh"
+  chmod +x "$baseline_root/scripts/check-dco.sh"
 
   awk '
     $0 == "Maintainers integrate pull requests with Rebase and Merge so each validated" {
@@ -1709,7 +1753,7 @@ scripts/check-repository-policy.sh
   guidance_output=$tmp_dir/baseline-missing-integration-guidance.out
   capture_failure "$guidance_output" run_baseline_validator ||
     fail 'baseline accepted missing rebase-only DCO integration guidance'
-  rg -Fqx \
+  grep -Fqx \
     'CONTRIBUTING.md does not require rebase-only DCO integration' \
     "$guidance_output" ||
     fail 'missing rebase-only DCO integration guidance diagnostic changed'
@@ -1761,7 +1805,7 @@ test_yaml() {
     validator_status=0
     "$validator" "$fixture_root" >"$fixture_output" 2>&1 ||
       validator_status=$?
-    rg -Fqx "$expected_diagnostic" "$fixture_output" ||
+    grep -Fqx "$expected_diagnostic" "$fixture_output" ||
       fail "$fixture_name did not report: $expected_diagnostic"
     [ "$validator_status" -ne 0 ] ||
       fail "$fixture_name was accepted"
@@ -2137,7 +2181,7 @@ body:
         - One
         - None
       default: -1'
-  rg -Fqx \
+  grep -Fqx \
     '.github/ISSUE_TEMPLATE/bug.yml: body[0].attributes.default cannot be combined with a None or n/a option' \
     "$tmp_dir/yaml-dropdown-compound-default.out" ||
     fail 'dropdown-compound-default did not preserve: default cannot be combined with a None or n/a option'
@@ -2299,18 +2343,18 @@ body:
     explicit_string_distinct_status=$?
   [ "$explicit_string_distinct_status" -ne 0 ] ||
     fail 'Boolean and explicitly tagged string root keys bypassed the schema'
-  rg -Fqx \
+  grep -Fqx \
     '.github/ISSUE_TEMPLATE/bug.yml: unknown root key: true' \
     "$explicit_string_distinct_output" ||
     fail 'explicit string tag was not loaded distinctly from a Boolean key'
   explicit_string_unknown_count=$(
-    rg -Fxc \
+    grep -Fxc \
       '.github/ISSUE_TEMPLATE/bug.yml: unknown root key: true' \
       "$explicit_string_distinct_output"
   )
   [ "$explicit_string_unknown_count" -eq 2 ] ||
     fail 'Boolean and explicitly tagged string keys did not remain distinct'
-  if rg -Fq 'duplicate mapping key' "$explicit_string_distinct_output"; then
+  if grep -Fq 'duplicate mapping key' "$explicit_string_distinct_output"; then
     fail 'explicit string tag was conflated with a Boolean key'
   fi
 
@@ -2387,11 +2431,11 @@ body:
     ast_gate_status=$?
   [ "$ast_gate_status" -ne 0 ] ||
     fail 'AST duplicate-key gate fixture was accepted'
-  rg -Fqx \
+  grep -Fqx \
     '.github/ISSUE_TEMPLATE/bug.yml: duplicate mapping key at $.name' \
     "$ast_gate_output" ||
     fail 'AST duplicate-key gate did not report its duplicate'
-  if rg -Fq '.github/ISSUE_TEMPLATE/bug.yml: invalid YAML' \
+  if grep -Fq '.github/ISSUE_TEMPLATE/bug.yml: invalid YAML' \
     "$ast_gate_output"; then
     fail 'AST duplicate-key errors did not gate safe loading'
   fi
@@ -2434,7 +2478,7 @@ contact_links:
     '.github/ISSUE_TEMPLATE/bug.yml: unknown root key: mystery' \
     '.github/ISSUE_TEMPLATE/bug.yml: description must be a non-empty string' \
     '.github/ISSUE_TEMPLATE/bug.yml: body must be a non-empty sequence'; do
-    rg -Fqx "$multiple_error" "$multiple_errors_output" ||
+    grep -Fqx "$multiple_error" "$multiple_errors_output" ||
       fail "multiple-error fixture did not preserve: $multiple_error"
   done
 
@@ -2584,7 +2628,7 @@ test_links() {
     run_link_validator "$fixture_repo" \
     --revision not-a-commit --lychee "$lychee" ||
     fail 'invalid link-check revision was accepted'
-  rg -q 'invalid commit revision: not-a-commit' "$invalid_revision_output" ||
+  grep -Fq 'invalid commit revision: not-a-commit' "$invalid_revision_output" ||
     fail 'invalid link-check revision did not report its value'
 
   relative_lychee_output=$tmp_dir/relative-lychee.out
@@ -2592,7 +2636,7 @@ test_links() {
     run_link_validator "$fixture_repo" \
     --revision HEAD --lychee ./lychee ||
     fail 'relative Lychee executable path was accepted'
-  rg -q 'Lychee path must be absolute' "$relative_lychee_output" ||
+  grep -Fq 'Lychee path must be absolute' "$relative_lychee_output" ||
     fail 'relative Lychee path did not report the absolute-path requirement'
 
   nonexecutable_lychee=$tmp_dir/nonexecutable-lychee
@@ -2602,7 +2646,7 @@ test_links() {
     run_link_validator "$fixture_repo" \
     --revision HEAD --lychee "$nonexecutable_lychee" ||
     fail 'nonexecutable absolute Lychee path was accepted'
-  rg -q 'Lychee path is not executable:' "$nonexecutable_lychee_output" ||
+  grep -Fq 'Lychee path is not executable:' "$nonexecutable_lychee_output" ||
     fail 'nonexecutable Lychee path did not report a clear diagnostic'
 
   dump_lychee=$tmp_dir/dump-lychee
@@ -2650,7 +2694,7 @@ test_links() {
   capture_failure "$invalid_file_url_output" \
     run_link_validator_with_dump "$fixture_repo" invalid "$dump_lychee" ||
     fail 'invalid serialized file URL was accepted'
-  rg -q 'invalid file URL in Markdown:' "$invalid_file_url_output" ||
+  grep -Fq 'invalid file URL in Markdown:' "$invalid_file_url_output" ||
     fail 'invalid serialized file URL did not report a clear diagnostic'
 
   invalid_utf8_output=$tmp_dir/invalid-utf8-file-url.out
@@ -2658,21 +2702,21 @@ test_links() {
     run_link_validator_with_dump \
     "$fixture_repo" invalid_utf8 "$dump_lychee" ||
     fail 'non-UTF-8 file URL path was accepted'
-  rg -q 'file URL path is not valid UTF-8:' "$invalid_utf8_output" ||
+  grep -Fq 'file URL path is not valid UTF-8:' "$invalid_utf8_output" ||
     fail 'non-UTF-8 file URL path did not report a clear diagnostic'
 
   nul_file_url_output=$tmp_dir/nul-file-url.out
   capture_failure "$nul_file_url_output" \
     run_link_validator_with_dump "$fixture_repo" nul "$dump_lychee" ||
     fail 'NUL-encoded file URL was accepted'
-  rg -q 'file URL contains a NUL byte:' "$nul_file_url_output" ||
+  grep -Fq 'file URL contains a NUL byte:' "$nul_file_url_output" ||
     fail 'NUL-encoded file URL did not report a clear diagnostic'
 
   authority_file_url_output=$tmp_dir/authority-file-url.out
   capture_failure "$authority_file_url_output" \
     run_link_validator_with_dump "$fixture_repo" authority "$dump_lychee" ||
     fail 'remote-authority file URL was accepted'
-  rg -q 'file URL authority is not allowed:' "$authority_file_url_output" ||
+  grep -Fq 'file URL authority is not allowed:' "$authority_file_url_output" ||
     fail 'remote-authority file URL did not report a clear diagnostic'
 
   inside_snapshot_output=$tmp_dir/inside-snapshot.out
@@ -2680,11 +2724,11 @@ test_links() {
     run_link_validator_with_tmp "$fixture_repo" "$fixture_repo" \
     --revision HEAD --lychee "$lychee" ||
     fail 'snapshot directory inside the repository was accepted'
-  rg -q 'snapshot directory must be outside the repository' \
+  grep -Fq 'snapshot directory must be outside the repository' \
     "$inside_snapshot_output" ||
     fail 'inside-repository snapshot did not report a clear diagnostic'
   if find "$fixture_repo" -maxdepth 1 -type d \
-    -name 'engrammesh-links.*' -print | rg -q .; then
+    -name 'engrammesh-links.*' -print | grep -q .; then
     fail 'rejected inside-repository snapshot was not cleaned up'
   fi
 
@@ -2696,7 +2740,7 @@ test_links() {
     run_link_validator "$fixture_repo" \
     --revision HEAD --lychee "$lychee" ||
     fail 'missing tracked target was accepted'
-  rg -q 'File not found[.] Check if file exists and path is correct' \
+  grep -Eq 'File not found[.] Check if file exists and path is correct' \
     "$missing_output" ||
     fail 'missing tracked target did not report the Lychee missing-file diagnostic'
 
@@ -2711,14 +2755,14 @@ test_links() {
   git -C "$untracked_repo" add docs/guide.md
   git -C "$untracked_repo" commit --quiet -m 'Untracked link target'
   git -C "$untracked_repo" status --short --untracked-files=all |
-    rg -q 'docs/untracked-target[.]md' ||
+    grep -Eq 'docs/untracked-target[.]md' ||
     fail 'untracked link target fixture was accidentally tracked'
   untracked_output=$tmp_dir/untracked-target.out
   capture_failure "$untracked_output" \
     run_link_validator "$untracked_repo" \
     --revision HEAD --lychee "$lychee" ||
     fail 'existing but untracked link target was accepted'
-  rg -q 'File not found[.] Check if file exists and path is correct' \
+  grep -Eq 'File not found[.] Check if file exists and path is correct' \
     "$untracked_output" ||
     fail 'untracked link target did not report the missing-file diagnostic'
 
@@ -2740,7 +2784,7 @@ test_links() {
     run_link_validator "$ignored_repo" \
     --revision HEAD --lychee "$lychee" ||
     fail 'existing but ignored link target was accepted'
-  rg -q 'File not found[.] Check if file exists and path is correct' \
+  grep -Eq 'File not found[.] Check if file exists and path is correct' \
     "$ignored_output" ||
     fail 'ignored link target did not report the missing-file diagnostic'
 
@@ -2782,7 +2826,7 @@ test_links() {
     run_link_validator_with_tmp "$plain_escape_repo" "$escape_tmp_dir" \
     --revision HEAD --lychee "$lychee" ||
     fail '../ link target escape was accepted'
-  rg -q 'link target escapes snapshot: .*outside[.]md' \
+  grep -Eq 'link target escapes snapshot: .*outside[.]md' \
     "$plain_escape_output" ||
     fail '../ link target escape did not report the escaped target'
 
@@ -2802,7 +2846,7 @@ test_links() {
     run_link_validator_with_tmp "$encoded_escape_repo" "$escape_tmp_dir" \
     --revision HEAD --lychee "$lychee" ||
     fail 'percent-encoded link target escape was accepted'
-  rg -q 'link target escapes snapshot: .*outside[.]md' \
+  grep -Eq 'link target escapes snapshot: .*outside[.]md' \
     "$encoded_escape_output" ||
     fail 'percent-encoded escape did not report the escaped target'
 
@@ -2822,7 +2866,7 @@ test_links() {
     run_link_validator_with_tmp "$encoded_separator_repo" "$escape_tmp_dir" \
     --revision HEAD --lychee "$lychee" ||
     fail 'percent-encoded separator escape was accepted'
-  rg -q 'link target escapes snapshot: .*outside[.]md' \
+  grep -Eq 'link target escapes snapshot: .*outside[.]md' \
     "$encoded_separator_output" ||
     fail 'percent-encoded separator escape did not report the escaped target'
 
@@ -2929,7 +2973,7 @@ test_links() {
       --root-dir "$fixture_repo" \
       './**/*.md'
   ) >"$protocol_relative_output"
-  rg -q '1 Excluded' "$protocol_relative_output" ||
+  grep -Fq '1 Excluded' "$protocol_relative_output" ||
     fail 'protocol-relative link was not discovered as an offline exclusion'
 
   printf '# CRLF target\n' >"$fixture_repo/docs/crlf-target.md"
@@ -2986,7 +3030,7 @@ test_links() {
     'docs/encoded%28target%29.md' \
     'docs/crlf-target.md' \
     'docs/tracked-directory'; do
-    rg -Fq "$discovered_link" "$discovery_output" ||
+    grep -Fq "$discovered_link" "$discovery_output" ||
       fail "Lychee dump omitted valid CommonMark target: $discovered_link"
   done
   for ignored_link in \
@@ -2994,7 +3038,7 @@ test_links() {
     'missing-fenced-target.md' \
     'missing-tilde-target.md' \
     'missing-inline-code-target.md'; do
-    if rg -Fq "$ignored_link" "$discovery_output"; then
+    if grep -Fq "$ignored_link" "$discovery_output"; then
       fail "Lychee dump discovered ignored code syntax: $ignored_link"
     fi
   done
@@ -3012,7 +3056,7 @@ test_links() {
     run_link_validator "$no_markdown_repo" \
     --revision HEAD --lychee "$lychee" ||
     fail 'revision without tracked Markdown was accepted'
-  rg -q 'no tracked Markdown files' "$no_markdown_output" ||
+  grep -Fq 'no tracked Markdown files' "$no_markdown_output" ||
     fail 'revision without tracked Markdown did not report a clear diagnostic'
 
   relative_symlink_repo=$tmp_dir/relative-symlink-fixture
@@ -3030,7 +3074,7 @@ test_links() {
     run_link_validator "$relative_symlink_repo" \
     --revision HEAD --lychee "$lychee" ||
     fail 'relative tracked symlink was accepted'
-  rg -q 'tracked symbolic link is not allowed: docs/relative-link[.]md' \
+  grep -Eq 'tracked symbolic link is not allowed: docs/relative-link[.]md' \
     "$relative_symlink_output" ||
     fail 'relative tracked symlink diagnostic omitted its path'
 
@@ -3050,7 +3094,7 @@ test_links() {
     run_link_validator "$absolute_symlink_repo" \
     --revision HEAD --lychee "$lychee" ||
     fail 'absolute tracked symlink was accepted'
-  rg -q 'tracked symbolic link is not allowed: docs/absolute-link[.]md' \
+  grep -Eq 'tracked symbolic link is not allowed: docs/absolute-link[.]md' \
     "$absolute_symlink_output" ||
     fail 'absolute tracked symlink diagnostic omitted its path'
 
