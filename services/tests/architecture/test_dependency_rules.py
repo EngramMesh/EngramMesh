@@ -60,7 +60,14 @@ def _dependency_violations(
                 continue
             if target == "engrammesh.shared.kernel" or target.startswith("engrammesh.shared.kernel."):
                 continue
-            if target.endswith(".public") and target.startswith("engrammesh.modules."):
+            target_parts = target.split(".")
+            if (
+                owning_module is not None
+                and target_parts[:2] == ["engrammesh", "modules"]
+                and len(target_parts) == 4
+                and target_parts[2] != owning_module
+                and target_parts[3] == "public"
+            ):
                 continue
             module_prefix = "engrammesh.modules."
             if owning_module is not None:
@@ -111,6 +118,34 @@ def test_dependency_rules_allow_another_modules_public_api(tmp_path: Path) -> No
     )
 
     assert _dependency_violations([source], source_root) == []
+
+
+def test_dependency_rules_reject_nested_public_module_path(tmp_path: Path) -> None:
+    source_root = tmp_path / "src"
+    source = source_root / "engrammesh" / "modules" / "runtime" / "domain" / "model.py"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "from engrammesh.modules.identity.domain.public import Identity\n",
+        encoding="utf-8",
+    )
+
+    violations = _dependency_violations([source], source_root)
+
+    assert any("another module's internals" in item for item in violations)
+
+
+def test_dependency_rules_reject_own_modules_public_api(tmp_path: Path) -> None:
+    source_root = tmp_path / "src"
+    source = source_root / "engrammesh" / "modules" / "memory" / "domain" / "model.py"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "from engrammesh.modules.memory.public import MemoryScope\n",
+        encoding="utf-8",
+    )
+
+    violations = _dependency_violations([source], source_root)
+
+    assert any("another module's internals" in item for item in violations)
 
 
 def test_dependency_rules_reject_owning_module_adapters(tmp_path: Path) -> None:
