@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from engrammesh.bootstrap.settings import (
     AppSettings,
+    ConfigurationError,
     Environment,
     ModuleSettings,
     PostgresSettings,
@@ -162,8 +163,92 @@ def test_production_rejects_plaintext_or_insecure_configuration(
     }
     production.update(overrides)
 
-    with pytest.raises(ValidationError, match=message):
+    with pytest.raises(ConfigurationError, match=message):
         AppSettings.model_validate(production)
+
+
+def test_invalid_production_configuration_never_exposes_postgres_secret() -> None:
+    secret = "review-sentinel-password"
+    dsn = f"postgresql://engrammesh:{secret}@postgres/engrammesh"
+    production: dict[str, object] = {
+        "environment": Environment.PRODUCTION,
+        "postgres": {"dsn": dsn},
+        "temporal": {
+            "namespace": "engrammesh-prod",
+            "task_queue": "engrammesh-prod",
+            "tls": True,
+        },
+    }
+
+    with pytest.raises(ConfigurationError) as raised:
+        AppSettings.model_validate(production)
+
+    renderings = (
+        str(raised.value),
+        repr(raised.value),
+        repr(raised.value.errors()),
+        raised.value.json(),
+    )
+    for rendering in renderings:
+        assert secret not in rendering
+        assert dsn not in rendering
+
+
+@pytest.mark.parametrize(
+    "sslmode",
+    [
+        None,
+        "disable",
+        "allow",
+        "prefer",
+        "require",
+        "verify-ca",
+        "verify-full&sslmode=",
+    ],
+)
+def test_production_rejects_postgres_without_full_certificate_verification(
+    sslmode: str | None,
+) -> None:
+    query = "" if sslmode is None else f"?sslmode={sslmode}"
+
+    with pytest.raises(ConfigurationError, match="PostgreSQL TLS"):
+        AppSettings.model_validate(
+            {
+                "environment": Environment.PRODUCTION,
+                "postgres": {
+                    "dsn": (
+                        "postgresql://engrammesh:secret@postgres/engrammesh"
+                        f"{query}"
+                    )
+                },
+                "temporal": {
+                    "namespace": "engrammesh-prod",
+                    "task_queue": "engrammesh-prod",
+                    "tls": True,
+                },
+            }
+        )
+
+
+def test_production_accepts_postgres_with_full_certificate_verification() -> None:
+    settings = AppSettings.model_validate(
+        {
+            "environment": Environment.PRODUCTION,
+            "postgres": {
+                "dsn": (
+                    "postgresql://engrammesh:secret@postgres/engrammesh"
+                    "?sslmode=verify-full"
+                )
+            },
+            "temporal": {
+                "namespace": "engrammesh-prod",
+                "task_queue": "engrammesh-prod",
+                "tls": True,
+            },
+        }
+    )
+
+    assert settings.environment is Environment.PRODUCTION
 
 
 @pytest.mark.parametrize("field", ["namespace", "task_queue"])
