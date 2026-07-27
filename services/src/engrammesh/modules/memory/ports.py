@@ -15,7 +15,8 @@ from engrammesh.modules.memory.domain.model import (
     MemoryScope,
     Sensitivity,
 )
-from engrammesh.shared.kernel.ids import MemoryId, SubjectId
+from engrammesh.shared.kernel.events import EventEnvelope
+from engrammesh.shared.kernel.ids import EventId, MemoryId, SubjectId
 
 
 def _require_optional_aware(value: datetime | None, field_name: str) -> None:
@@ -181,6 +182,29 @@ class MemoryRerankerPort(Protocol):
 
 
 @runtime_checkable
+class ClockPort(Protocol):
+    """Current-time provider for deterministic applications."""
+
+    async def now(self) -> datetime: ...
+
+
+@runtime_checkable
+class MemoryIdentityPort(Protocol):
+    """Memory and event identity provider."""
+
+    async def new_memory_id(self) -> MemoryId: ...
+
+    async def new_event_id(self) -> EventId: ...
+
+
+@runtime_checkable
+class OutboxPort(Protocol):
+    """Transactional domain-event publication boundary."""
+
+    async def publish(self, event: EventEnvelope) -> None: ...
+
+
+@runtime_checkable
 class MemoryUnitOfWork(Protocol):
     """Atomic episode and claim persistence boundary."""
 
@@ -199,4 +223,14 @@ class MemoryUnitOfWork(Protocol):
     @property
     def claims(self) -> ClaimStore: ...
 
+    @property
+    def outbox(self) -> OutboxPort: ...
+
     async def commit(self) -> None: ...
+
+
+@runtime_checkable
+class MemoryUnitOfWorkFactory(Protocol):
+    """Synchronous factory for memory units of work."""
+
+    def create(self) -> MemoryUnitOfWork: ...

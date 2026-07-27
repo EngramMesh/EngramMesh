@@ -1,5 +1,12 @@
 """Supported cross-module cognitive-memory contracts."""
 
+from engrammesh.modules.memory.application.contracts import (
+    RecordEpisodeCommand,
+    RecordEpisodeResult,
+)
+from engrammesh.modules.memory.application.errors import (
+    EpisodeAuthorizationDenied,
+)
 from engrammesh.modules.memory.domain.model import (
     ApprovalStatus,
     Claim,
@@ -31,6 +38,7 @@ __all__ = (
     "ClaimProposal",
     "ClaimStatus",
     "Episode",
+    "EpisodeAuthorizationDenied",
     "EpistemicKind",
     "EvidenceItem",
     "EvidencePacket",
@@ -38,6 +46,8 @@ __all__ = (
     "MemoryQuery",
     "MemoryScope",
     "ProcedureVersion",
+    "RecordEpisodeCommand",
+    "RecordEpisodeResult",
     "RetentionClass",
     "Sensitivity",
     "SourceType",

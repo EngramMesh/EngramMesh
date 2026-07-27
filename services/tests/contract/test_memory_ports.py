@@ -31,18 +31,24 @@ from engrammesh.modules.memory.ports import (
     CandidateSet,
     ClaimProposal,
     ClaimStore,
+    ClockPort,
     EntityResolverPort,
     EpisodeStore,
     MemoryAuthorizationPort,
     MemoryExtractorPort,
+    MemoryIdentityPort,
     MemoryQuery,
     MemoryRerankerPort,
     MemoryUnitOfWork,
+    MemoryUnitOfWorkFactory,
+    OutboxPort,
 )
 from engrammesh.modules.memory.public import __all__ as public_exports
+from engrammesh.shared.kernel.events import EventEnvelope
 from engrammesh.shared.kernel.ids import (
     AgentInstanceId,
     ArtifactId,
+    EventId,
     MemoryId,
     SubjectId,
     TenantId,
@@ -57,6 +63,10 @@ PROTOCOLS = (
     EntityResolverPort,
     MemoryRerankerPort,
     MemoryUnitOfWork,
+    ClockPort,
+    MemoryIdentityPort,
+    OutboxPort,
+    MemoryUnitOfWorkFactory,
 )
 
 EXPECTED_METHODS = {
@@ -68,6 +78,10 @@ EXPECTED_METHODS = {
     EntityResolverPort: ("propose_matches",),
     MemoryRerankerPort: ("rerank",),
     MemoryUnitOfWork: ("__aenter__", "__aexit__", "commit"),
+    ClockPort: ("now",),
+    MemoryIdentityPort: ("new_memory_id", "new_event_id"),
+    OutboxPort: ("publish",),
+    MemoryUnitOfWorkFactory: ("create",),
 }
 
 EXPECTED_PROTOCOL_MEMBERS = {
@@ -75,7 +89,7 @@ EXPECTED_PROTOCOL_MEMBERS = {
     for protocol, method_names in EXPECTED_METHODS.items()
 }
 EXPECTED_PROTOCOL_MEMBERS[MemoryUnitOfWork] = frozenset(
-    {"__aenter__", "__aexit__", "episodes", "claims", "commit"}
+    {"__aenter__", "__aexit__", "episodes", "claims", "outbox", "commit"}
 )
 
 DATACLASS_SHAPES = {
@@ -273,6 +287,26 @@ PROTOCOL_SIGNATURES = {
         (("self", EMPTY, EMPTY),),
         None,
     ),
+    ClockPort.now: (
+        (("self", EMPTY, EMPTY),),
+        datetime,
+    ),
+    MemoryIdentityPort.new_memory_id: (
+        (("self", EMPTY, EMPTY),),
+        MemoryId,
+    ),
+    MemoryIdentityPort.new_event_id: (
+        (("self", EMPTY, EMPTY),),
+        EventId,
+    ),
+    OutboxPort.publish: (
+        (("self", EMPTY, EMPTY), ("event", EventEnvelope, EMPTY)),
+        None,
+    ),
+    MemoryUnitOfWorkFactory.create: (
+        (("self", EMPTY, EMPTY),),
+        MemoryUnitOfWork,
+    ),
 }
 
 
@@ -287,6 +321,7 @@ def test_ports_are_runtime_checkable_protocols(protocol: type[object]) -> None:
     [
         (protocol, method_name)
         for protocol, method_names in EXPECTED_METHODS.items()
+        if protocol is not MemoryUnitOfWorkFactory
         for method_name in method_names
     ],
 )
@@ -295,6 +330,10 @@ def test_all_port_methods_are_coroutine_functions(
     method_name: str,
 ) -> None:
     assert inspect.iscoroutinefunction(getattr(protocol, method_name))
+
+
+def test_unit_of_work_factory_create_is_synchronous() -> None:
+    assert not inspect.iscoroutinefunction(MemoryUnitOfWorkFactory.create)
 
 
 @pytest.mark.parametrize(
@@ -393,17 +432,20 @@ def test_storage_and_search_methods_are_explicitly_scoped() -> None:
 def test_unit_of_work_exposes_typed_repository_properties() -> None:
     assert isinstance(MemoryUnitOfWork.episodes, property)
     assert isinstance(MemoryUnitOfWork.claims, property)
+    assert isinstance(MemoryUnitOfWork.outbox, property)
     assert get_type_hints(MemoryUnitOfWork.episodes.fget)["return"] is EpisodeStore
     assert get_type_hints(MemoryUnitOfWork.claims.fget)["return"] is ClaimStore
+    assert get_type_hints(MemoryUnitOfWork.outbox.fget)["return"] is OutboxPort
     declared_properties = {
         name
         for name, member in vars(MemoryUnitOfWork).items()
         if isinstance(member, property)
     }
-    assert declared_properties == {"episodes", "claims"}
+    assert declared_properties == {"episodes", "claims", "outbox"}
     for property_name, expected_return in (
         ("episodes", EpisodeStore),
         ("claims", ClaimStore),
+        ("outbox", OutboxPort),
     ):
         getter = getattr(MemoryUnitOfWork, property_name).fget
         signature = inspect.signature(getter, eval_str=True)
@@ -506,8 +548,13 @@ def test_public_surface_exports_only_supported_contracts() -> None:
         "CandidateSet",
         "ClaimProposal",
     }
+    application_exports = {
+        "EpisodeAuthorizationDenied",
+        "RecordEpisodeCommand",
+        "RecordEpisodeResult",
+    }
 
-    assert set(public_exports) == domain_exports | dto_exports
+    assert set(public_exports) == domain_exports | dto_exports | application_exports
     assert not {protocol.__name__ for protocol in PROTOCOLS} & set(public_exports)
     assert "AppendResult" not in public_exports
 
