@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
@@ -335,6 +336,84 @@ def test_procedure_copies_input_schema_into_immutable_mapping() -> None:
     assert procedure.input_schema == {"type": "object"}
     with pytest.raises(TypeError):
         procedure.input_schema["type"] = "string"  # type: ignore[index]
+
+
+def test_procedure_recursively_copies_nested_schema_containers() -> None:
+    source_schema: dict[str, Any] = {
+        "properties": {
+            "name": {
+                "type": "string",
+                "examples": ["Ada"],
+            }
+        },
+        "required": ["name"],
+    }
+    procedure = ProcedureVersion(
+        **procedure_values(input_schema=source_schema)
+    )
+
+    source_schema["properties"]["name"]["type"] = "integer"
+    source_schema["properties"]["name"]["examples"].append("Grace")
+    source_schema["required"].append("age")
+
+    assert procedure.input_schema == {
+        "properties": {
+            "name": {
+                "type": "string",
+                "examples": ("Ada",),
+            }
+        },
+        "required": ("name",),
+    }
+
+
+def test_procedure_exposes_only_recursively_immutable_schema_containers() -> None:
+    procedure = ProcedureVersion(
+        **procedure_values(
+            input_schema={
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "examples": ["Ada"],
+                    }
+                },
+                "required": ["name"],
+            }
+        )
+    )
+    properties = procedure.input_schema["properties"]
+    assert isinstance(properties, Mapping)
+    name_schema = properties["name"]
+    assert isinstance(name_schema, Mapping)
+    examples = name_schema["examples"]
+    required = procedure.input_schema["required"]
+
+    with pytest.raises(TypeError):
+        properties["name"] = {}  # type: ignore[index]
+    with pytest.raises(TypeError):
+        name_schema["type"] = "integer"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        examples[0] = "Grace"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        required[0] = "age"  # type: ignore[index]
+    assert procedure.input_schema == {
+        "properties": {
+            "name": {
+                "type": "string",
+                "examples": ("Ada",),
+            }
+        },
+        "required": ("name",),
+    }
+
+
+def test_procedure_rejects_unsupported_mutable_schema_container() -> None:
+    with pytest.raises(TypeError, match="input_schema"):
+        ProcedureVersion(
+            **procedure_values(
+                input_schema={"examples": {"Ada", "Grace"}},
+            )
+        )
 
 
 def test_evidence_packet_keeps_temporal_categories_distinct() -> None:

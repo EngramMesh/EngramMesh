@@ -1,6 +1,7 @@
 import inspect
-from dataclasses import FrozenInstanceError, is_dataclass
+from dataclasses import MISSING, FrozenInstanceError, fields, is_dataclass
 from datetime import datetime
+from types import TracebackType
 from typing import get_type_hints
 
 import pytest
@@ -9,8 +10,11 @@ from engrammesh.modules.memory import ports
 from engrammesh.modules.memory.domain.model import (
     Claim,
     Episode,
+    EvidenceItem,
     EvidencePacket,
+    EvidenceRef,
     MemoryScope,
+    ProcedureVersion,
 )
 from engrammesh.modules.memory.ports import (
     AppendResult,
@@ -28,7 +32,11 @@ from engrammesh.modules.memory.ports import (
     MemoryUnitOfWork,
 )
 from engrammesh.modules.memory.public import __all__ as public_exports
-from engrammesh.shared.kernel.ids import MemoryId, SubjectId, TenantId
+from engrammesh.shared.kernel.ids import (
+    MemoryId,
+    SubjectId,
+    TenantId,
+)
 
 PROTOCOLS = (
     EpisodeStore,
@@ -52,6 +60,198 @@ EXPECTED_METHODS = {
     MemoryUnitOfWork: ("__aenter__", "__aexit__", "commit"),
 }
 
+DATACLASS_SHAPES = {
+    MemoryScope: (
+        ("tenant_id", MISSING),
+        ("subject_id", MISSING),
+        ("workspace_id", None),
+        ("agent_id", None),
+    ),
+    Episode: (
+        ("id", MISSING),
+        ("scope", MISSING),
+        ("actor_id", MISSING),
+        ("source_type", MISSING),
+        ("content_ref", MISSING),
+        ("observed_at", MISSING),
+        ("ingested_at", MISSING),
+        ("content_hash", MISSING),
+        ("idempotency_key", MISSING),
+        ("sensitivity", MISSING),
+        ("retention_class", MISSING),
+        ("consent_basis", MISSING),
+    ),
+    EvidenceRef: (
+        ("episode_id", MISSING),
+        ("source_span", MISSING),
+        ("extractor_version", MISSING),
+        ("model_ref", None),
+        ("prompt_version", None),
+    ),
+    Claim: (
+        ("id", MISSING),
+        ("scope", MISSING),
+        ("subject", MISSING),
+        ("predicate", MISSING),
+        ("object_value", MISSING),
+        ("polarity", MISSING),
+        ("epistemic_kind", MISSING),
+        ("confidence", MISSING),
+        ("valid_from", MISSING),
+        ("valid_to", MISSING),
+        ("recorded_from", MISSING),
+        ("recorded_to", MISSING),
+        ("status", MISSING),
+        ("evidence", MISSING),
+    ),
+    ProcedureVersion: (
+        ("id", MISSING),
+        ("version", MISSING),
+        ("content_ref", MISSING),
+        ("input_schema", MISSING),
+        ("preconditions", MISSING),
+        ("evaluation_score", MISSING),
+        ("approval_status", MISSING),
+        ("derived_from", MISSING),
+        ("created_by", MISSING),
+    ),
+    EvidenceItem: (
+        ("claim", MISSING),
+        ("temporal_status", MISSING),
+        ("lexical_score", 0.0),
+        ("semantic_score", 0.0),
+        ("temporal_score", 0.0),
+        ("graph_score", 0.0),
+        ("rerank_score", 0.0),
+    ),
+    EvidencePacket: (
+        ("query_id", MISSING),
+        ("items", MISSING),
+        ("generated_at", MISSING),
+    ),
+    MemoryQuery: (
+        ("scope", MISSING),
+        ("text", MISSING),
+        ("valid_at", None),
+        ("recorded_at", None),
+        ("limit", 10),
+    ),
+    AppendResult: (
+        ("episode_id", MISSING),
+        ("created", MISSING),
+    ),
+    ClaimProposal: (("claim", MISSING),),
+    CandidateSet: (("items", MISSING),),
+    AuthorizationRequest: (
+        ("actor_id", MISSING),
+        ("scope", MISSING),
+        ("action", MISSING),
+        ("sensitivity", MISSING),
+    ),
+}
+
+EMPTY = inspect.Signature.empty
+PARAMETER = inspect.Parameter.POSITIONAL_OR_KEYWORD
+PROTOCOL_SIGNATURES = {
+    EpisodeStore.append: (
+        (("self", EMPTY, EMPTY), ("episode", Episode, EMPTY)),
+        AppendResult,
+    ),
+    EpisodeStore.get: (
+        (
+            ("self", EMPTY, EMPTY),
+            ("scope", MemoryScope, EMPTY),
+            ("episode_id", MemoryId, EMPTY),
+        ),
+        Episode | None,
+    ),
+    EpisodeStore.stream: (
+        (
+            ("self", EMPTY, EMPTY),
+            ("scope", MemoryScope, EMPTY),
+            ("cursor", str | None, None),
+        ),
+        tuple[Episode, ...],
+    ),
+    ClaimStore.add_proposal: (
+        (("self", EMPTY, EMPTY), ("proposal", ClaimProposal, EMPTY)),
+        None,
+    ),
+    ClaimStore.current: (
+        (("self", EMPTY, EMPTY), ("query", MemoryQuery, EMPTY)),
+        tuple[Claim, ...],
+    ),
+    ClaimStore.history: (
+        (
+            ("self", EMPTY, EMPTY),
+            ("scope", MemoryScope, EMPTY),
+            ("claim_id", MemoryId, EMPTY),
+        ),
+        tuple[Claim, ...],
+    ),
+    CandidateIndex.search: (
+        (("self", EMPTY, EMPTY), ("query", MemoryQuery, EMPTY)),
+        CandidateSet,
+    ),
+    CandidateIndex.upsert: (
+        (
+            ("self", EMPTY, EMPTY),
+            ("scope", MemoryScope, EMPTY),
+            ("items", tuple[EvidenceItem, ...], EMPTY),
+        ),
+        None,
+    ),
+    CandidateIndex.remove: (
+        (
+            ("self", EMPTY, EMPTY),
+            ("scope", MemoryScope, EMPTY),
+            ("memory_ids", tuple[MemoryId, ...], EMPTY),
+        ),
+        None,
+    ),
+    MemoryAuthorizationPort.authorize: (
+        (("self", EMPTY, EMPTY), ("request", AuthorizationRequest, EMPTY)),
+        bool,
+    ),
+    MemoryExtractorPort.propose: (
+        (("self", EMPTY, EMPTY), ("episode", Episode, EMPTY)),
+        tuple[ClaimProposal, ...],
+    ),
+    EntityResolverPort.propose_matches: (
+        (
+            ("self", EMPTY, EMPTY),
+            ("scope", MemoryScope, EMPTY),
+            ("claim", Claim, EMPTY),
+        ),
+        tuple[MemoryId, ...],
+    ),
+    MemoryRerankerPort.rerank: (
+        (
+            ("self", EMPTY, EMPTY),
+            ("query", MemoryQuery, EMPTY),
+            ("candidates", CandidateSet, EMPTY),
+        ),
+        EvidencePacket,
+    ),
+    MemoryUnitOfWork.__aenter__: (
+        (("self", EMPTY, EMPTY),),
+        MemoryUnitOfWork,
+    ),
+    MemoryUnitOfWork.__aexit__: (
+        (
+            ("self", EMPTY, EMPTY),
+            ("exc_type", type[BaseException] | None, EMPTY),
+            ("exc_value", BaseException | None, EMPTY),
+            ("traceback", TracebackType | None, EMPTY),
+        ),
+        None,
+    ),
+    MemoryUnitOfWork.commit: (
+        (("self", EMPTY, EMPTY),),
+        None,
+    ),
+}
+
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 def test_ports_are_runtime_checkable_protocols(protocol: type[object]) -> None:
@@ -72,6 +272,82 @@ def test_all_port_methods_are_coroutine_functions(
     method_name: str,
 ) -> None:
     assert inspect.iscoroutinefunction(getattr(protocol, method_name))
+
+
+@pytest.mark.parametrize(
+    ("contract", "expected_fields"),
+    DATACLASS_SHAPES.items(),
+)
+def test_dataclass_fields_have_exact_names_order_and_defaults(
+    contract: type[object],
+    expected_fields: tuple[tuple[str, object], ...],
+) -> None:
+    actual_fields = fields(contract)
+
+    assert tuple(field.name for field in actual_fields) == tuple(
+        name for name, _ in expected_fields
+    )
+    for field, (_, expected_default) in zip(
+        actual_fields,
+        expected_fields,
+        strict=True,
+    ):
+        if expected_default is MISSING:
+            assert field.default is MISSING
+        else:
+            assert type(field.default) is type(expected_default)
+            assert field.default == expected_default
+        assert field.default_factory is MISSING
+
+
+@pytest.mark.parametrize(
+    ("method", "expected"),
+    PROTOCOL_SIGNATURES.items(),
+)
+def test_protocol_methods_have_exact_signatures(
+    method: object,
+    expected: tuple[
+        tuple[tuple[str, object, object], ...],
+        object,
+    ],
+) -> None:
+    expected_parameters, expected_return = expected
+    signature = inspect.signature(method, eval_str=True)
+
+    assert tuple(
+        (
+            parameter.name,
+            parameter.annotation,
+            parameter.default,
+            parameter.kind,
+        )
+        for parameter in signature.parameters.values()
+    ) == tuple(
+        (name, annotation, default, PARAMETER)
+        for name, annotation, default in expected_parameters
+    )
+    assert signature.return_annotation == expected_return
+
+
+@pytest.mark.parametrize(
+    ("protocol", "expected_members"),
+    [
+        (protocol, frozenset(method_names))
+        for protocol, method_names in EXPECTED_METHODS.items()
+    ],
+)
+def test_protocols_have_no_extra_public_methods(
+    protocol: type[object],
+    expected_members: frozenset[str],
+) -> None:
+    public_methods = {
+        name
+        for name, member in vars(protocol).items()
+        if inspect.isfunction(member)
+        and (not name.startswith("_") or name in {"__aenter__", "__aexit__"})
+    }
+
+    assert public_methods == expected_members
 
 
 def test_storage_and_search_methods_are_explicitly_scoped() -> None:
@@ -104,6 +380,23 @@ def test_unit_of_work_exposes_typed_repository_properties() -> None:
     assert isinstance(MemoryUnitOfWork.claims, property)
     assert get_type_hints(MemoryUnitOfWork.episodes.fget)["return"] is EpisodeStore
     assert get_type_hints(MemoryUnitOfWork.claims.fget)["return"] is ClaimStore
+    declared_properties = {
+        name
+        for name, member in vars(MemoryUnitOfWork).items()
+        if isinstance(member, property)
+    }
+    assert declared_properties == {"episodes", "claims"}
+    for property_name, expected_return in (
+        ("episodes", EpisodeStore),
+        ("claims", ClaimStore),
+    ):
+        getter = getattr(MemoryUnitOfWork, property_name).fget
+        signature = inspect.signature(getter, eval_str=True)
+        assert tuple(signature.parameters) == ("self",)
+        assert signature.parameters["self"].annotation is EMPTY
+        assert signature.parameters["self"].default is EMPTY
+        assert signature.parameters["self"].kind is PARAMETER
+        assert signature.return_annotation is expected_return
 
 
 @pytest.mark.parametrize(
