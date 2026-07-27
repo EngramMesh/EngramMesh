@@ -60,6 +60,8 @@ def _dependency_violations(
                 continue
             if target == "engrammesh.shared.kernel" or target.startswith("engrammesh.shared.kernel."):
                 continue
+            if target.endswith(".public") and target.startswith("engrammesh.modules."):
+                continue
             module_prefix = "engrammesh.modules."
             if owning_module is not None:
                 own_domain = f"{module_prefix}{owning_module}.domain"
@@ -97,6 +99,18 @@ def test_dependency_rules_reject_another_modules_internals(tmp_path: Path) -> No
     violations = _dependency_violations([source], source_root)
 
     assert any("another module's internals" in item for item in violations)
+
+
+def test_dependency_rules_allow_another_modules_public_api(tmp_path: Path) -> None:
+    source_root = tmp_path / "src"
+    source = source_root / "engrammesh" / "modules" / "runtime" / "domain" / "model.py"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "from engrammesh.modules.memory.public import MemoryScope\n",
+        encoding="utf-8",
+    )
+
+    assert _dependency_violations([source], source_root) == []
 
 
 def test_dependency_rules_reject_owning_module_adapters(tmp_path: Path) -> None:
