@@ -1,0 +1,45 @@
+name: Repository policy
+
+"on":
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: required-policy-${{ github.event.pull_request.number || github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-policy:
+    name: repository-policy
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run repository policy
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          TREE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git cat-file -e "${HEAD_SHA}^{commit}"
+          git cat-file -e "${TREE_SHA}^{commit}"
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            git cat-file -e "${BASE_SHA}^{commit}"
+            ./scripts/check-repository-policy.sh \
+              --range "$BASE_SHA" "$HEAD_SHA" --tree "$TREE_SHA"
+          else
+            ./scripts/check-repository-policy.sh \
+              --all "$HEAD_SHA" --tree "$TREE_SHA"
+          fi

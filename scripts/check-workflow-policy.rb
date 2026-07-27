@@ -134,6 +134,24 @@ expected_workflows.each do |workflow_name, job_name|
 end
 
 required_path, required_workflow = workflows_by_name.fetch("Repository policy")
+required_job = required_workflow.fetch("jobs").fetch("repository-policy")
+required_run_lines =
+  Array(required_job["steps"]).each_with_object([]) do |step, lines|
+    next unless step.is_a?(Hash) && step["run"].is_a?(String)
+
+    lines.concat(step["run"].lines.map(&:strip))
+  end
+[
+  'git cat-file -e "${HEAD_SHA}^{commit}"',
+  'git cat-file -e "${TREE_SHA}^{commit}"',
+  'git cat-file -e "${BASE_SHA}^{commit}"'
+].each do |guard|
+  next if required_run_lines.include?(guard)
+
+  warn "#{required_path}: missing required guard: #{guard}"
+  exit 1
+end
+
 required_concurrency = required_workflow["concurrency"]
 required_group =
   if required_concurrency.is_a?(Hash)

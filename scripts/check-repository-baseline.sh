@@ -26,11 +26,39 @@ docs/rfcs/README.md
 .github/ISSUE_TEMPLATE/bug.yml
 .github/ISSUE_TEMPLATE/feature.yml
 .github/ISSUE_TEMPLATE/config.yml
+scripts/install-policy-tools.sh
+scripts/check-dco.sh
+scripts/check-markdown-links.sh
+scripts/check-community-yaml.rb
+scripts/check-private-history.sh
+scripts/check-workflow-policy.rb
+scripts/test-repository-policy.sh
+scripts/check-repository-policy.sh
+.github/workflows/repository-policy.yml
+.github/workflows/external-links.yml
 "
 
 for path in $required_files; do
   if [ ! -s "$path" ]; then
     printf 'missing or empty: %s\n' "$path" >&2
+    exit 1
+  fi
+done
+
+required_executables="
+scripts/install-policy-tools.sh
+scripts/check-dco.sh
+scripts/check-markdown-links.sh
+scripts/check-community-yaml.rb
+scripts/check-private-history.sh
+scripts/check-workflow-policy.rb
+scripts/test-repository-policy.sh
+scripts/check-repository-policy.sh
+"
+
+for path in $required_executables; do
+  if [ ! -x "$path" ]; then
+    printf 'not executable: %s\n' "$path" >&2
     exit 1
   fi
 done
@@ -42,6 +70,22 @@ fi
 
 if ! grep -q "git commit -s" CONTRIBUTING.md; then
   printf 'CONTRIBUTING.md does not enforce DCO sign-off\n' >&2
+  exit 1
+fi
+
+if ! awk '
+  {
+    current = $0
+    sub(/\r$/, "", current)
+    if (previous == "Maintainers integrate pull requests with Rebase and Merge so each validated" &&
+        current == "DCO trailer remains in the main history. Squash Merge and Merge Commit are not used.") {
+      found = 1
+    }
+    previous = current
+  }
+  END { exit found ? 0 : 1 }
+' CONTRIBUTING.md; then
+  printf 'CONTRIBUTING.md does not require rebase-only DCO integration\n' >&2
   exit 1
 fi
 
