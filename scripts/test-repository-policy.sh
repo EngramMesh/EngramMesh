@@ -882,7 +882,10 @@ test_workflow() {
       'name: Repository policy
 on:
   pull_request:
+    branches: [main]
   push:
+    branches: [main]
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
@@ -1031,6 +1034,48 @@ jobs:
   reset_workflow_fixture
   run_workflow_validator ||
     fail 'approved workflow fixture was rejected'
+
+  reset_workflow_fixture
+  sed '/^  pull_request:/,/^  push:/{ /^  push:/!d; }' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/missing-pull-request.yml"
+  mv "$tmp_dir/missing-pull-request.yml" \
+    "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected missing-pull-request \
+    '.github/workflows/repository-policy.yml: missing required event: pull_request'
+
+  reset_workflow_fixture
+  sed '/^  pull_request:/,/^  push:/ s/    branches: \[main\]/    branches: [develop]/' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/pull-request-branches.yml"
+  mv "$tmp_dir/pull-request-branches.yml" \
+    "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected pull-request-branches \
+    '.github/workflows/repository-policy.yml: pull_request branches must include main'
+
+  reset_workflow_fixture
+  sed '/^  push:/,/^  workflow_dispatch:/{ /^  workflow_dispatch:/!d; }' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/missing-push.yml"
+  mv "$tmp_dir/missing-push.yml" "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected missing-push \
+    '.github/workflows/repository-policy.yml: missing required event: push'
+
+  reset_workflow_fixture
+  sed '/^  push:/,/^  workflow_dispatch:/ s/    branches: \[main\]/    branches: [develop]/' \
+    "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/push-branches.yml"
+  mv "$tmp_dir/push-branches.yml" "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected push-branches \
+    '.github/workflows/repository-policy.yml: push branches must include main'
+
+  reset_workflow_fixture
+  sed '/^  workflow_dispatch:$/d' "$workflow_dir/repository-policy.yml" \
+    >"$tmp_dir/missing-workflow-dispatch.yml"
+  mv "$tmp_dir/missing-workflow-dispatch.yml" \
+    "$workflow_dir/repository-policy.yml"
+  assert_workflow_rejected missing-workflow-dispatch \
+    '.github/workflows/repository-policy.yml: missing required event: workflow_dispatch'
 
   for guard_name in head tree base; do
     case $guard_name in
