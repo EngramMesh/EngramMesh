@@ -267,12 +267,19 @@ capture, requires PostgreSQL `sslmode=verify-full`, and requires Temporal TLS.
 ## Next adapter obligation
 
 A future PostgreSQL Episode adapter must bind every assertion in
+`EPISODE_ADAPTER_CONTRACTS` from
 `tests/contract/memory_adapter_contract.py` through its own typed harness without
-changing the reusable assertion bodies. It must also add PostgreSQL-specific
-integration coverage for migrations, constraints, transaction isolation,
-tenant enforcement, and failure behavior. Claim persistence and cursor support
-remain unavailable in this slice; changing those behaviors requires a separately
-reviewed contract revision.
+changing the reusable assertion bodies. That core registry does not assume one
+global lock and does not require Claim operations or cursors to be unavailable.
+`IN_MEMORY_CAPABILITY_CONTRACTS` separately describes the current in-memory
+adapter's unavailable Claims, rejected cursors, and cancellation while queued
+on its process-global lock. Another adapter binds a capability profile only
+when that capability and synchronization model apply.
+
+The PostgreSQL adapter must also add PostgreSQL-specific integration coverage
+for migrations, constraints, transaction isolation, tenant enforcement, and
+failure behavior. New shared capability behavior requires a separately reviewed
+contract profile rather than edits to the portable Episode assertion bodies.
 
 After separate design review, later phases may add an explicit composition root,
 PostgreSQL or Temporal adapters, migrations, APIs, workers, and external event
