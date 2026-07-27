@@ -5,11 +5,12 @@ from uuid import UUID
 
 import pytest
 
-from engrammesh.modules.memory.public import MemoryScope
+from engrammesh.modules.memory.public import MemoryQuery, MemoryScope
 from engrammesh.modules.runtime.domain.model import (
     AgentInvocation,
     Budget,
     Decision,
+    ExecutionSpec,
     JoinKind,
     NodeKind,
     Plan,
@@ -58,6 +59,26 @@ def _node(node_id: NodeId | None = None) -> PlanNode:
         side_effect_class=SideEffectClass.NONE,
         acceptance_criteria=("schema-valid",),
     )
+
+
+def test_execution_spec_rejects_memory_query_for_another_scope() -> None:
+    scope = MemoryScope(TenantId.new(), SubjectId.new())
+    other_scope = MemoryScope(TenantId.new(), SubjectId.new())
+
+    with pytest.raises(ValueError, match="memory_query.scope"):
+        ExecutionSpec(
+            id=ExecutionId.new(),
+            scope=scope,
+            objective_ref=ArtifactId.new(),
+            root_agent_id=AgentDefinitionId.new(),
+            memory_query=MemoryQuery(
+                query_id="query-1",
+                scope=other_scope,
+                text="tea",
+            ),
+            budget=_budget(),
+            idempotency_key="execution-1",
+        )
 
 
 def test_plan_rejects_duplicate_node_ids() -> None:

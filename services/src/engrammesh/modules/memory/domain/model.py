@@ -26,6 +26,12 @@ def _require_optional_aware(value: datetime | None, field_name: str) -> None:
         _require_aware(value, field_name)
 
 
+def _require_non_blank(value: str, field_name: str) -> None:
+    if not value.strip():
+        msg = f"{field_name} must not be blank"
+        raise ValueError(msg)
+
+
 def _require_half_open_interval(
     start: datetime,
     end: datetime | None,
@@ -67,6 +73,10 @@ class MemoryScope:
     subject_id: SubjectId
     workspace_id: str | None = None
     agent_id: AgentInstanceId | None = None
+
+    def __post_init__(self) -> None:
+        if self.workspace_id is not None:
+            _require_non_blank(self.workspace_id, "workspace_id")
 
 
 class SourceType(StrEnum):
@@ -117,9 +127,9 @@ class Episode:
     def __post_init__(self) -> None:
         _require_aware(self.observed_at, "observed_at")
         _require_aware(self.ingested_at, "ingested_at")
-        if not self.idempotency_key.strip():
-            msg = "idempotency_key must not be blank"
-            raise ValueError(msg)
+        _require_non_blank(self.content_hash, "content_hash")
+        _require_non_blank(self.idempotency_key, "idempotency_key")
+        _require_non_blank(self.consent_basis, "consent_basis")
 
 
 class EpistemicKind(StrEnum):
@@ -272,9 +282,14 @@ class EvidencePacket:
     """Immutable evidence selected for one memory query."""
 
     query_id: str
+    scope: MemoryScope
     items: tuple[EvidenceItem, ...]
     generated_at: datetime
 
     def __post_init__(self) -> None:
         _require_aware(self.generated_at, "generated_at")
-        object.__setattr__(self, "items", tuple(self.items))
+        items = tuple(self.items)
+        if any(item.claim.scope != self.scope for item in items):
+            msg = "every evidence item claim scope must match packet scope"
+            raise ValueError(msg)
+        object.__setattr__(self, "items", items)

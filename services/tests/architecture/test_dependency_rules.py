@@ -75,7 +75,7 @@ def _dependency_violations(
                 if target == own_domain or target.startswith(f"{own_domain}."):
                     continue
             if target.startswith(module_prefix):
-                violations.append(f"{source}: imports another module's internals: {target}")
+                violations.append(f"{source}: imports non-domain module internals: {target}")
             else:
                 violations.append(f"{source}: imports non-standard-library dependency: {target}")
     return violations
@@ -105,7 +105,7 @@ def test_dependency_rules_reject_another_modules_internals(tmp_path: Path) -> No
     )
     violations = _dependency_violations([source], source_root)
 
-    assert any("another module's internals" in item for item in violations)
+    assert any("non-domain module internals" in item for item in violations)
 
 
 def test_dependency_rules_allow_another_modules_public_api(tmp_path: Path) -> None:
@@ -131,7 +131,7 @@ def test_dependency_rules_reject_nested_public_module_path(tmp_path: Path) -> No
 
     violations = _dependency_violations([source], source_root)
 
-    assert any("another module's internals" in item for item in violations)
+    assert any("non-domain module internals" in item for item in violations)
 
 
 def test_dependency_rules_reject_own_modules_public_api(tmp_path: Path) -> None:
@@ -145,7 +145,7 @@ def test_dependency_rules_reject_own_modules_public_api(tmp_path: Path) -> None:
 
     violations = _dependency_violations([source], source_root)
 
-    assert any("another module's internals" in item for item in violations)
+    assert any("non-domain module internals" in item for item in violations)
 
 
 def test_dependency_rules_reject_owning_module_adapters(tmp_path: Path) -> None:

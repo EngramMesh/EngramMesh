@@ -22,6 +22,7 @@ from engrammesh.modules.memory.domain.model import (
     SourceType,
     TemporalStatus,
 )
+from engrammesh.modules.memory.ports import CandidateSet
 from engrammesh.shared.kernel.ids import (
     AgentInstanceId,
     ArtifactId,
@@ -134,6 +135,12 @@ def test_scope_is_immutable() -> None:
         scope.workspace_id = "other"
 
 
+@pytest.mark.parametrize("workspace_id", ("", " ", "\t\n"))
+def test_scope_rejects_blank_workspace_id(workspace_id: str) -> None:
+    with pytest.raises(ValueError, match="workspace_id"):
+        MemoryScope(**scope_values(workspace_id=workspace_id))
+
+
 def test_memory_enum_values_are_stable_strings() -> None:
     assert {item.value for item in SourceType} == {
         "user",
@@ -210,6 +217,16 @@ def test_episode_rejects_naive_timestamps(field_name: str) -> None:
 def test_episode_rejects_blank_idempotency_key(idempotency_key: str) -> None:
     with pytest.raises(ValueError, match="idempotency_key"):
         Episode(**episode_values(idempotency_key=idempotency_key))
+
+
+@pytest.mark.parametrize("field_name", ("content_hash", "consent_basis"))
+@pytest.mark.parametrize("value", ("", " ", "\t\n"))
+def test_episode_rejects_blank_required_text(
+    field_name: str,
+    value: str,
+) -> None:
+    with pytest.raises(ValueError, match=field_name):
+        Episode(**episode_values(**{field_name: value}))
 
 
 def test_claim_preserves_bitemporal_intervals_and_evidence() -> None:
@@ -417,9 +434,10 @@ def test_procedure_rejects_unsupported_mutable_schema_container() -> None:
 
 
 def test_evidence_packet_keeps_temporal_categories_distinct() -> None:
+    scope = MemoryScope(**scope_values())
     items = tuple(
         EvidenceItem(
-            claim=Claim(**claim_values()),
+            claim=Claim(**claim_values(scope=scope)),
             temporal_status=status,
         )
         for status in TemporalStatus
@@ -427,6 +445,7 @@ def test_evidence_packet_keeps_temporal_categories_distinct() -> None:
 
     packet = EvidencePacket(
         query_id="query-1",
+        scope=scope,
         items=items,
         generated_at=NOW,
     )
@@ -442,6 +461,40 @@ def test_evidence_packet_rejects_naive_generated_at() -> None:
     with pytest.raises(ValueError, match="generated_at"):
         EvidencePacket(
             query_id="query-1",
+            scope=MemoryScope(**scope_values()),
             items=(),
             generated_at=datetime(2026, 7, 27, 10, 0),  # noqa: DTZ001
         )
+
+
+@pytest.mark.parametrize("container_type", (EvidencePacket, CandidateSet))
+def test_evidence_containers_reject_claims_outside_their_scope(
+    container_type: type[EvidencePacket | CandidateSet],
+) -> None:
+    scope = MemoryScope(**scope_values())
+    item = EvidenceItem(
+        claim=Claim(**claim_values()),
+        temporal_status=TemporalStatus.CURRENT,
+    )
+
+    values: dict[str, object] = {"scope": scope, "items": (item,)}
+    if container_type is EvidencePacket:
+        values |= {"query_id": "query-1", "generated_at": NOW}
+
+    with pytest.raises(ValueError, match="scope"):
+        container_type(**values)
+
+
+def test_candidate_set_copies_items_and_preserves_scope() -> None:
+    scope = MemoryScope(**scope_values())
+    item = EvidenceItem(
+        claim=Claim(**claim_values(scope=scope)),
+        temporal_status=TemporalStatus.CURRENT,
+    )
+    source = [item]
+
+    candidates = CandidateSet(scope=scope, items=source)  # type: ignore[arg-type]
+    source.clear()
+
+    assert candidates.scope is scope
+    assert candidates.items == (item,)

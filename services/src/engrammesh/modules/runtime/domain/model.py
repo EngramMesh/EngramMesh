@@ -176,6 +176,9 @@ class ExecutionSpec:
 
     def __post_init__(self) -> None:
         _require_non_blank(self.idempotency_key, "idempotency_key")
+        if self.memory_query is not None and self.memory_query.scope != self.scope:
+            msg = "memory_query.scope must match execution scope"
+            raise ValueError(msg)
 
 
 @dataclass(frozen=True, slots=True)
@@ -520,6 +523,7 @@ class ExecutionSnapshot:
     """Small durable state snapshot; large values remain artifact references."""
 
     execution_id: ExecutionId
+    scope: MemoryScope
     revision: int
     status: ExecutionStatus
     plan_revision: int | None

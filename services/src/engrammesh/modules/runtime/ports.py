@@ -27,11 +27,13 @@ class OrchestratorPort(Protocol):
 
     async def get_snapshot(
         self,
+        scope: MemoryScope,
         execution_id: ExecutionId,
     ) -> ExecutionSnapshot: ...
 
     async def cancel(
         self,
+        scope: MemoryScope,
         execution_id: ExecutionId,
         idempotency_key: str,
     ) -> ExecutionSnapshot: ...

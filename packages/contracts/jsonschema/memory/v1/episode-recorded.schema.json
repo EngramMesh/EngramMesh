@@ -66,14 +66,9 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "tenant_id",
         "subject_id"
       ],
       "properties": {
-        "tenant_id": {
-          "type": "string",
-          "format": "uuid"
-        },
         "subject_id": {
           "type": "string",
           "format": "uuid"
@@ -82,7 +77,9 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "minLength": 1,
+          "pattern": "\\S"
         },
         "agent_id": {
           "type": [
@@ -147,11 +144,13 @@
         },
         "content_hash": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "\\S"
         },
         "idempotency_key": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "\\S"
         },
         "sensitivity": {
           "enum": [
@@ -171,7 +170,8 @@
         },
         "consent_basis": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "\\S"
         }
       }
     }

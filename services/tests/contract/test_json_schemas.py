@@ -65,7 +65,6 @@ def _episode_event() -> dict[str, object]:
         {
             "episode_id": UUIDS["episode"],
             "scope": {
-                "tenant_id": UUIDS["tenant"],
                 "subject_id": UUIDS["subject"],
                 "workspace_id": "workspace-42",
                 "agent_id": None,
@@ -176,7 +175,7 @@ def test_schema_rejects_missing_required_contract_fields(
             ("occurred_at",),
             "not-a-timestamp",
         ),
-        ("episode", _episode_event(), ("payload", "scope", "tenant_id"), "not-a-uuid"),
+        ("episode", _episode_event(), ("payload", "scope", "subject_id"), "not-a-uuid"),
         ("execution", _execution_event(), ("payload", "revision"), 0),
     ],
 )
@@ -204,3 +203,38 @@ def test_event_envelope_rejects_blank_event_type_like_python_contract(
 
     with pytest.raises(ValidationError):
         _validator("envelope").validate(event)
+
+
+def test_episode_event_uses_envelope_as_its_only_tenant_authority() -> None:
+    event = _episode_event()
+
+    assert event["tenant_id"] == UUIDS["tenant"]
+    assert "tenant_id" not in event["payload"]["scope"]
+    _validator("episode").validate(event)
+
+    event["payload"]["scope"]["tenant_id"] = UUIDS["tenant"]
+    with pytest.raises(ValidationError):
+        _validator("episode").validate(event)
+
+
+@pytest.mark.parametrize(
+    ("path", "invalid_value"),
+    [
+        (("payload", "scope", "workspace_id"), " "),
+        (("payload", "content_hash"), "\t"),
+        (("payload", "idempotency_key"), " "),
+        (("payload", "consent_basis"), "\n"),
+    ],
+)
+def test_episode_schema_rejects_blank_non_nullable_text(
+    path: tuple[str, ...],
+    invalid_value: str,
+) -> None:
+    event = _episode_event()
+    target = event
+    for component in path[:-1]:
+        target = target[component]
+    target[path[-1]] = invalid_value
+
+    with pytest.raises(ValidationError):
+        _validator("episode").validate(event)
