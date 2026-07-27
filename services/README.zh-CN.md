@@ -78,7 +78,7 @@ for suite in tools dco history links workflow orchestration external baseline ya
 done
 ```
 
-配置从 `ENGRAMMESH__` 变量读取，并用 `__` 分隔嵌套字段，例如 `ENGRAMMESH__TEMPORAL__NAMESPACE`。系统不会隐式加载 `.env`。生产环境验证对敏感遥测内容采集以及不安全的 PostgreSQL 或 Temporal 传输采取关闭失败策略。
+配置从 `ENGRAMMESH__` 变量读取，并用 `__` 分隔嵌套字段，例如 `ENGRAMMESH__TEMPORAL__NAMESPACE`。系统不会隐式加载 `.env`。生产环境验证对敏感遥测内容采集采取关闭失败策略，要求 PostgreSQL 使用 `sslmode=verify-full`，并要求 Temporal 启用 TLS。
 
 ## 下一实现阶段可以增加什么
 

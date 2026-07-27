@@ -107,7 +107,7 @@ done
 Configuration is read from `ENGRAMMESH__` variables with `__` between nested
 fields, for example `ENGRAMMESH__TEMPORAL__NAMESPACE`. There is no implicit
 `.env` loading. Production validation fails closed for sensitive telemetry
-capture and insecure PostgreSQL or Temporal transport.
+capture, requires PostgreSQL `sslmode=verify-full`, and requires Temporal TLS.
 
 ## What the next implementation phase may add
 

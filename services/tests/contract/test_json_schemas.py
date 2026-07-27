@@ -194,3 +194,13 @@ def test_schema_rejects_invalid_identifier_timestamp_or_revision(
 
     with pytest.raises(ValidationError):
         _validator(schema_name).validate(candidate)
+
+
+@pytest.mark.parametrize("event_type", ["", " ", "\t\n"])
+def test_event_envelope_rejects_blank_event_type_like_python_contract(
+    event_type: str,
+) -> None:
+    event = _envelope(event_type, {})
+
+    with pytest.raises(ValidationError):
+        _validator("envelope").validate(event)

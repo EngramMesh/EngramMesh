@@ -1,11 +1,35 @@
 """Typed, immutable process configuration boundary."""
 
+import json
 from enum import StrEnum
 from typing import Literal, Self
 from urllib.parse import parse_qs, urlsplit
 
 from pydantic import BaseModel, ConfigDict, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class ConfigurationError(RuntimeError):
+    """Sanitized public error for unsafe configuration combinations."""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
+
+    def errors(self) -> tuple[dict[str, object], ...]:
+        """Return structured error details without preserving input values."""
+        return (
+            {
+                "type": "configuration_error",
+                "loc": (),
+                "msg": str(self),
+                "code": self.code,
+            },
+        )
+
+    def json(self) -> str:
+        """Serialize structured error details without preserving input values."""
+        return json.dumps(self.errors(), separators=(",", ":"))
 
 
 class Environment(StrEnum):
@@ -85,19 +109,19 @@ class AppSettings(BaseSettings):
 
         if self.telemetry.capture_sensitive_content:
             msg = "production must not capture sensitive content in plaintext telemetry"
-            raise ValueError(msg)
+            raise ConfigurationError("plaintext_telemetry", msg)
 
         dsn = urlsplit(self.postgres.dsn.get_secret_value())
         if dsn.scheme not in {"postgres", "postgresql"} or dsn.hostname is None:
             msg = "production requires a PostgreSQL DSN with an explicit host"
-            raise ValueError(msg)
-        sslmode = parse_qs(dsn.query).get("sslmode", [""])[-1]
-        if sslmode not in {"require", "verify-ca", "verify-full"}:
-            msg = "production requires PostgreSQL TLS"
-            raise ValueError(msg)
+            raise ConfigurationError("invalid_postgres_dsn", msg)
+        sslmodes = parse_qs(dsn.query, keep_blank_values=True).get("sslmode", [])
+        if sslmodes != ["verify-full"]:
+            msg = "production requires PostgreSQL TLS with sslmode=verify-full"
+            raise ConfigurationError("insecure_postgres_tls", msg)
 
         if not self.temporal.tls:
             msg = "production requires Temporal TLS"
-            raise ValueError(msg)
+            raise ConfigurationError("insecure_temporal_tls", msg)
 
         return self

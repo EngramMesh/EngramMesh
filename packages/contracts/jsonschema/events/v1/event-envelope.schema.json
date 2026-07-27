@@ -25,7 +25,8 @@
     },
     "event_type": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "pattern": "\\S"
     },
     "schema_version": {
       "const": 1
