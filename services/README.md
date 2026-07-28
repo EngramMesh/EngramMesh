@@ -136,9 +136,11 @@ Idempotency is scoped to `(tenant_id, idempotency_key)`. The first append
 returns `created=True`. A collision is an exact replay only when scope, actor,
 source type, content reference, observed time, content hash, sensitivity,
 retention class, and consent basis all match. Generated Episode ID and
-`ingested_at` are excluded from that comparison. An exact replay returns the
-original Episode ID with `created=False` and stages no second event; any
-request-derived difference raises the zero-payload
+`ingested_at` are excluded from that comparison. `correlation_id` is Outbox
+tracing metadata, not an Episode-defining immutable field, so it is also
+excluded. An exact replay returns the original Episode ID with `created=False`
+and stages no second event; any difference in those compared Episode-defining
+fields raises the zero-payload
 `EpisodeIdempotencyConflict` without changing state. A different tenant may
 reuse the same key.
 

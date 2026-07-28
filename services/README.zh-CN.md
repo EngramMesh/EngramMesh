@@ -90,7 +90,7 @@ RecordEpisodeCommand
 
 ## 幂等与事务语义
 
-幂等范围是 `(tenant_id, idempotency_key)`。第一次追加返回 `created=True`。只有在 Scope、Actor、来源类型、内容引用、观察时间、内容哈希、敏感级别、保留类别和同意依据全部匹配时，冲突才属于精确重放；生成的 Episode ID 和 `ingested_at` 不参与比较。精确重放返回原始 Episode ID 和 `created=False`，且不会暂存第二个事件；任何请求派生字段不同都会抛出不携带载荷的 `EpisodeIdempotencyConflict`，且不改变状态。不同租户可以复用同一键。
+幂等范围是 `(tenant_id, idempotency_key)`。第一次追加返回 `created=True`。只有在 Scope、Actor、来源类型、内容引用、观察时间、内容哈希、敏感级别、保留类别和同意依据全部匹配时，冲突才属于精确重放；生成的 Episode ID 和 `ingested_at` 不参与比较。`correlation_id` 是 Outbox 追踪元数据而非 Episode 定义的不可变字段，因此也不参与比较。精确重放返回原始 Episode ID 和 `created=False`，且不会暂存第二个事件；任一上述参与比较的 Episode 定义字段不同都会抛出不携带载荷的 `EpisodeIdempotencyConflict`，且不改变状态。不同租户可以复用同一键。
 
 内存 Adapter 使用一个进程内锁串行化事务，并采用写时复制状态。成功的 `commit()` 会让新快照立即成为最终状态并全局可见；之后事务体抛出异常、被取消或退出上下文，都不会恢复旧状态。未调用 `commit()` 就退出时，仍会丢弃暂存的 Episode、幂等索引与 Outbox 变更。
 

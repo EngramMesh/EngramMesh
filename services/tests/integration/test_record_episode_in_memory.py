@@ -224,6 +224,30 @@ async def test_real_handler_first_write_replay_and_tenant_reuse() -> None:
 
 
 @pytest.mark.asyncio
+async def test_real_handler_replays_with_new_correlation_without_new_event(
+) -> None:
+    database = InMemoryMemoryDatabase()
+    handler = make_handler(InMemoryMemoryUnitOfWorkFactory(database))
+    command = make_command()
+    retry_correlation_id = CorrelationId(
+        UUID("171a1c4e-502b-47d0-abca-a95cd4f8fe0b")
+    )
+
+    first = await handler.handle(command)
+    replay = await handler.handle(
+        replace(command, correlation_id=retry_correlation_id)
+    )
+
+    assert first.created is True
+    assert replay.episode_id == first.episode_id
+    assert replay.created is False
+    assert len(database.episodes) == 1
+    assert len(database.events) == 1
+    assert database.events[0].correlation_id == command.correlation_id
+    assert database.events[0].correlation_id != retry_correlation_id
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("after_publish", [False, True])
 async def test_real_handler_rolls_back_staged_episode_and_outbox(
     *,
