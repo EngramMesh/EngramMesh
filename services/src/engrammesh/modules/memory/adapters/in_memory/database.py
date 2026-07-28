@@ -63,6 +63,3 @@ class InMemoryMemoryDatabase:
             idempotency_index=MappingProxyType(dict(idempotency_index)),
             events=tuple(events),
         )
-
-    def _restore(self, state: _CommittedMemoryState) -> None:
-        self._state = state

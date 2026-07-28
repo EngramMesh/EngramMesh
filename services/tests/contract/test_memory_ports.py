@@ -550,6 +550,7 @@ def test_public_surface_exports_only_supported_contracts() -> None:
     }
     application_exports = {
         "EpisodeAuthorizationDenied",
+        "EpisodeIdempotencyConflict",
         "RecordEpisodeCommand",
         "RecordEpisodeResult",
     }

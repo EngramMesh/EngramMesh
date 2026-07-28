@@ -126,22 +126,35 @@ RecordEpisodeCommand
 
 Authorization completes before the transaction opens. Invalid command or domain
 values and adapter errors propagate unchanged because transport-specific error
-translation is outside this slice.
+translation is outside this slice. The handler rejects a naive clock value and
+canonicalizes both the clock time and command `observed_at` to UTC before
+constructing the Episode or event.
 
 ## Idempotency and transaction semantics
 
 Idempotency is scoped to `(tenant_id, idempotency_key)`. The first append
-returns `created=True`; a replay in the same tenant returns the original Episode
-ID with `created=False` and stages no second event. A different tenant may reuse
-the same key.
+returns `created=True`. A collision is an exact replay only when scope, actor,
+source type, content reference, observed time, content hash, sensitivity,
+retention class, and consent basis all match. Generated Episode ID and
+`ingested_at` are excluded from that comparison. An exact replay returns the
+original Episode ID with `created=False` and stages no second event; any
+request-derived difference raises the zero-payload
+`EpisodeIdempotencyConflict` without changing state. A different tenant may
+reuse the same key.
 
 The in-memory adapter serializes transactions with one process-local lock and
-uses copy-on-write state. `commit()` stages the new committed snapshot, while
-successful context exit completes the transaction. Exit without `commit()`, an
-exception, or cancellation discards staged Episode, idempotency, and Outbox
-changes. An exception or cancellation after `commit()` but before successful
-context exit restores the pre-transaction snapshot. This behavior is an atomic
-local test/development model, not a production concurrency or durability model.
+uses copy-on-write state. A successful `commit()` makes the new snapshot final
+and globally visible; a later body exception, cancellation, or context exit does
+not restore the old state. Exit without `commit()` still discards staged
+Episode, idempotency, and Outbox changes.
+
+For `memory.episode-recorded`, Outbox publication requires the aggregate Episode
+to be visible in the transaction—whether committed earlier or newly staged—and
+requires the envelope tenant to match the Episode tenant. Unknown and
+cross-tenant Episode aggregates are rejected. Other event types are outside
+this Episode correlation rule. Accepted aware timestamps are serialized in
+canonical UTC. These behaviors are an atomic local test/development model, not
+a production concurrency, durability, or external-delivery model.
 
 ## Run the example
 

@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import Protocol, cast
 from uuid import UUID
 
 import pytest
 
+from engrammesh.modules.memory.domain.errors import EpisodeIdempotencyConflict
 from engrammesh.modules.memory.domain.model import (
     Episode,
     MemoryScope,
@@ -170,10 +172,11 @@ def make_event(
     identifier: int,
     *,
     episode: Episode,
+    event_type: str = "memory.episode-recorded",
 ) -> EventEnvelope:
     return EventEnvelope(
         event_id=event_id(identifier),
-        event_type="memory.episode-recorded",
+        event_type=event_type,
         schema_version=1,
         tenant_id=episode.scope.tenant_id,
         aggregate_id=episode.id,
@@ -234,15 +237,15 @@ async def assert_exact_scope_denial(
         assert await unit_of_work.episodes.get(scope, memory_id(99)) is None
 
 
-async def assert_tenant_scoped_idempotent_replay(
+async def assert_exact_idempotent_replay(
     make_harness: MemoryAdapterHarnessFactory,
 ) -> None:
     harness = make_harness()
     first = make_episode(1, idempotency_key="shared-key")
-    replay = make_episode(
-        2,
-        scope=make_scope(subject_id=SUBJECT_B, workspace_id="workspace-b"),
-        idempotency_key="shared-key",
+    replay = replace(
+        first,
+        id=memory_id(2),
+        ingested_at=first.ingested_at + timedelta(hours=1),
     )
 
     async with harness.unit_of_work_factory.create() as unit_of_work:
@@ -256,6 +259,71 @@ async def assert_tenant_scoped_idempotent_replay(
     assert replay_result.created is False
     assert replay_result.episode_id == first.id
     assert harness.committed_episodes == (first,)
+
+
+async def assert_divergent_idempotency_conflicts(
+    make_harness: MemoryAdapterHarnessFactory,
+) -> None:
+    harness = make_harness()
+    first = make_episode(1, idempotency_key="shared-key")
+    variants = (
+        replace(
+            first,
+            id=memory_id(2),
+            scope=replace(first.scope, subject_id=SUBJECT_B),
+        ),
+        replace(
+            first,
+            id=memory_id(3),
+            scope=replace(first.scope, workspace_id="workspace-b"),
+        ),
+        replace(
+            first,
+            id=memory_id(4),
+            scope=replace(first.scope, agent_id=AGENT_ID),
+        ),
+        replace(first, id=memory_id(5), actor_id=SUBJECT_B),
+        replace(first, id=memory_id(6), source_type=SourceType.AGENT),
+        replace(
+            first,
+            id=memory_id(7),
+            content_ref=ArtifactId(
+                UUID("b41f7014-d39b-4d47-b5cb-4cef87111458")
+            ),
+        ),
+        replace(
+            first,
+            id=memory_id(8),
+            observed_at=first.observed_at + timedelta(seconds=1),
+        ),
+        replace(first, id=memory_id(9), content_hash="sha256:different"),
+        replace(
+            first,
+            id=memory_id(10),
+            sensitivity=Sensitivity.RESTRICTED,
+        ),
+        replace(
+            first,
+            id=memory_id(11),
+            retention_class=RetentionClass.EXTENDED,
+        ),
+        replace(first, id=memory_id(12), consent_basis="legal_obligation"),
+    )
+
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        await unit_of_work.episodes.append(first)
+        await unit_of_work.commit()
+
+    for variant in variants:
+        async with harness.unit_of_work_factory.create() as unit_of_work:
+            with pytest.raises(EpisodeIdempotencyConflict) as raised:
+                await unit_of_work.episodes.append(variant)
+            assert raised.value.args == ()
+            assert await unit_of_work.episodes.stream(first.scope) == (first,)
+            await unit_of_work.commit()
+
+    assert harness.committed_episodes == (first,)
+    assert harness.committed_events == ()
 
 
 async def assert_different_tenants_may_reuse_idempotency_key(
@@ -298,6 +366,57 @@ async def assert_outbox_publication_order(
         await unit_of_work.commit()
 
     assert harness.committed_events == events
+
+
+async def assert_episode_outbox_requires_visible_matching_aggregate(
+    make_harness: MemoryAdapterHarnessFactory,
+) -> None:
+    harness = make_harness()
+    committed = make_episode(1)
+    staged = make_episode(2)
+    unknown = make_episode(99)
+    committed_event = make_event(1, episode=committed)
+    staged_event = make_event(2, episode=staged)
+    other_event = make_event(
+        3,
+        episode=unknown,
+        event_type="memory.projection-requested",
+    )
+
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        await unit_of_work.episodes.append(committed)
+        await unit_of_work.commit()
+
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        await unit_of_work.outbox.publish(committed_event)
+        await unit_of_work.episodes.append(staged)
+        await unit_of_work.outbox.publish(staged_event)
+
+        with pytest.raises(
+            ValueError,
+            match="outbox episode event aggregate is unknown",
+        ):
+            await unit_of_work.outbox.publish(make_event(4, episode=unknown))
+        with pytest.raises(
+            ValueError,
+            match="outbox event tenant does not match episode tenant",
+        ):
+            await unit_of_work.outbox.publish(
+                replace(
+                    make_event(5, episode=committed),
+                    tenant_id=TENANT_B,
+                )
+            )
+
+        await unit_of_work.outbox.publish(other_event)
+        await unit_of_work.commit()
+
+    assert harness.committed_episodes == (committed, staged)
+    assert harness.committed_events == (
+        committed_event,
+        staged_event,
+        other_event,
+    )
 
 
 async def assert_exit_without_commit_rolls_back(
@@ -368,9 +487,14 @@ async def assert_twenty_concurrent_duplicates_converge(
 ) -> None:
     harness = make_harness()
     barrier = AsyncStartBarrier(parties=20)
+    first = make_episode(1, idempotency_key="shared-key")
 
     async def append(identifier: int) -> AppendResult:
-        episode = make_episode(identifier, idempotency_key="shared-key")
+        episode = replace(
+            first,
+            id=memory_id(identifier),
+            ingested_at=first.ingested_at + timedelta(seconds=identifier),
+        )
         event = make_event(identifier, episode=episode)
         await barrier.arrive_and_wait()
         async with harness.unit_of_work_factory.create() as unit_of_work:
@@ -547,15 +671,15 @@ async def assert_cancellation_inside_transaction_rolls_back_and_releases_lock(
     assert harness.committed_events == ()
 
 
-async def assert_cancellation_after_commit_restores_and_releases_lock(
+async def assert_cancellation_after_commit_remains_and_releases_lock(
     make_harness: MemoryAdapterHarnessFactory,
 ) -> None:
     harness = make_harness()
     original = make_episode(1)
-    rolled_back = make_episode(2)
+    committed = make_episode(2)
     persisted = make_episode(3)
     original_event = make_event(1, episode=original)
-    rolled_back_event = make_event(2, episode=rolled_back)
+    committed_event = make_event(2, episode=committed)
     persisted_event = make_event(3, episode=persisted)
 
     async with harness.unit_of_work_factory.create() as unit_of_work:
@@ -568,8 +692,8 @@ async def assert_cancellation_after_commit_restores_and_releases_lock(
 
     async def commit_then_wait() -> None:
         async with harness.unit_of_work_factory.create() as unit_of_work:
-            await unit_of_work.episodes.append(rolled_back)
-            await unit_of_work.outbox.publish(rolled_back_event)
+            await unit_of_work.episodes.append(committed)
+            await unit_of_work.outbox.publish(committed_event)
             await unit_of_work.commit()
             commit_finished.set()
             async with asyncio.timeout(CONTRACT_TIMEOUT_SECONDS):
@@ -579,6 +703,8 @@ async def assert_cancellation_after_commit_restores_and_releases_lock(
     try:
         async with asyncio.timeout(CONTRACT_TIMEOUT_SECONDS):
             await commit_finished.wait()
+        assert harness.committed_episodes == (original, committed)
+        assert harness.committed_events == (original_event, committed_event)
         transaction_task.cancel()
         async with asyncio.timeout(CONTRACT_TIMEOUT_SECONDS):
             with pytest.raises(asyncio.CancelledError):
@@ -586,8 +712,8 @@ async def assert_cancellation_after_commit_restores_and_releases_lock(
     finally:
         await _cancel_and_drain_tasks((transaction_task,))
 
-    assert harness.committed_episodes == (original,)
-    assert harness.committed_events == (original_event,)
+    assert harness.committed_episodes == (original, committed)
+    assert harness.committed_events == (original_event, committed_event)
 
     async with asyncio.timeout(CONTRACT_TIMEOUT_SECONDS):
         async with harness.unit_of_work_factory.create() as unit_of_work:
@@ -595,8 +721,12 @@ async def assert_cancellation_after_commit_restores_and_releases_lock(
             await unit_of_work.outbox.publish(persisted_event)
             await unit_of_work.commit()
 
-    assert harness.committed_episodes == (original, persisted)
-    assert harness.committed_events == (original_event, persisted_event)
+    assert harness.committed_episodes == (original, committed, persisted)
+    assert harness.committed_events == (
+        original_event,
+        committed_event,
+        persisted_event,
+    )
 
 
 EPISODE_ADAPTER_CONTRACTS: tuple[
@@ -605,12 +735,17 @@ EPISODE_ADAPTER_CONTRACTS: tuple[
 ] = (
     ("first_append_get_stream", assert_first_append_get_and_stream),
     ("exact_scope_denial", assert_exact_scope_denial),
-    ("tenant_scoped_replay", assert_tenant_scoped_idempotent_replay),
+    ("exact_replay", assert_exact_idempotent_replay),
+    ("divergent_idempotency_conflict", assert_divergent_idempotency_conflicts),
     (
         "different_tenant_same_key",
         assert_different_tenants_may_reuse_idempotency_key,
     ),
     ("outbox_order", assert_outbox_publication_order),
+    (
+        "episode_outbox_integrity",
+        assert_episode_outbox_requires_visible_matching_aggregate,
+    ),
     ("exit_without_commit", assert_exit_without_commit_rolls_back),
     (
         "exception_after_episode",
@@ -632,7 +767,7 @@ EPISODE_ADAPTER_CONTRACTS: tuple[
     ),
     (
         "cancel_after_commit",
-        assert_cancellation_after_commit_restores_and_releases_lock,
+        assert_cancellation_after_commit_remains_and_releases_lock,
     ),
 )
 
