@@ -7,6 +7,7 @@ from engrammesh.modules.memory.application.contracts import (
 from engrammesh.modules.memory.application.errors import (
     EpisodeAuthorizationDenied,
 )
+from engrammesh.modules.memory.domain.errors import EpisodeIdempotencyConflict
 from engrammesh.modules.memory.domain.model import (
     ApprovalStatus,
     Claim,
@@ -39,6 +40,7 @@ __all__ = (
     "ClaimStatus",
     "Episode",
     "EpisodeAuthorizationDenied",
+    "EpisodeIdempotencyConflict",
     "EpistemicKind",
     "EvidenceItem",
     "EvidencePacket",

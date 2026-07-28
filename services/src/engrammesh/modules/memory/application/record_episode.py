@@ -1,5 +1,6 @@
 """Application orchestration for recording immutable memory episodes."""
 
+from datetime import UTC, datetime
 from typing import final
 
 from engrammesh.modules.memory.application.contracts import (
@@ -18,6 +19,13 @@ from engrammesh.modules.memory.ports import (
     MemoryUnitOfWorkFactory,
 )
 from engrammesh.shared.kernel.events import EventEnvelope
+
+
+def _canonical_utc(value: datetime, field_name: str) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        msg = f"{field_name} must be timezone-aware"
+        raise ValueError(msg)
+    return value.astimezone(UTC)
 
 
 @final
@@ -53,7 +61,8 @@ class RecordEpisodeHandler:
         if not authorized:
             raise EpisodeAuthorizationDenied()
 
-        ingested_at = await self._clock.now()
+        ingested_at = _canonical_utc(await self._clock.now(), "clock now")
+        observed_at = _canonical_utc(command.observed_at, "observed_at")
         episode_id = await self._identities.new_memory_id()
         episode = Episode(
             id=episode_id,
@@ -61,7 +70,7 @@ class RecordEpisodeHandler:
             actor_id=command.actor_id,
             source_type=command.source_type,
             content_ref=command.content_ref,
-            observed_at=command.observed_at,
+            observed_at=observed_at,
             ingested_at=ingested_at,
             content_hash=command.content_hash,
             idempotency_key=command.idempotency_key,
@@ -105,7 +114,7 @@ class RecordEpisodeHandler:
                             "actor_id": str(command.actor_id),
                             "source_type": command.source_type.value,
                             "content_ref": str(command.content_ref),
-                            "observed_at": command.observed_at.isoformat(),
+                            "observed_at": observed_at.isoformat(),
                             "ingested_at": ingested_at.isoformat(),
                             "content_hash": command.content_hash,
                             "idempotency_key": command.idempotency_key,

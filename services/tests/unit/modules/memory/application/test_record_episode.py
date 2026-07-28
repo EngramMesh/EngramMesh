@@ -1,6 +1,7 @@
 import json
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import Never, Self
@@ -441,6 +442,78 @@ async def test_first_write_records_episode_publishes_exact_v1_event_and_commits(
 
 
 @pytest.mark.asyncio
+async def test_aware_second_offsets_are_canonicalized_to_utc_and_schema_valid(
+) -> None:
+    calls: list[str] = []
+    observed_at = datetime(
+        2026,
+        7,
+        27,
+        14,
+        0,
+        tzinfo=timezone(timedelta(hours=5, minutes=30, seconds=45)),
+    )
+    ingested_at = datetime(
+        2026,
+        7,
+        27,
+        2,
+        0,
+        tzinfo=timezone(-timedelta(hours=3, minutes=15, seconds=30)),
+    )
+    command = replace(make_command(), observed_at=observed_at)
+    unit_of_work = RecordingUnitOfWork(calls)
+    handler = RecordEpisodeHandler(
+        authorization=AllowingAuthorization(calls),
+        clock=FixedClock(calls, value=ingested_at),
+        identities=FixedIdentities(calls),
+        unit_of_work_factory=FixedUnitOfWorkFactory(calls, unit_of_work),
+    )
+
+    await handler.handle(command)
+
+    expected_observed_at = observed_at.astimezone(UTC)
+    expected_ingested_at = ingested_at.astimezone(UTC)
+    episode = unit_of_work.episode_store.episodes[0]
+    event = unit_of_work.outbox_adapter.events[0]
+    document = event_document(event)
+
+    assert episode.observed_at == expected_observed_at
+    assert episode.ingested_at == expected_ingested_at
+    assert event.occurred_at == expected_ingested_at
+    assert document["occurred_at"] == expected_ingested_at.isoformat()
+    payload = document["payload"]
+    assert isinstance(payload, Mapping)
+    assert payload["observed_at"] == expected_observed_at.isoformat()
+    assert payload["ingested_at"] == expected_ingested_at.isoformat()
+    schema_value = json.loads(EPISODE_SCHEMA.read_text(encoding="utf-8"))
+    assert isinstance(schema_value, Mapping)
+    Draft202012Validator(
+        schema_value,
+        format_checker=FormatChecker(),
+    ).validate(document)
+
+
+@pytest.mark.asyncio
+async def test_naive_clock_is_rejected_before_identity_or_uow() -> None:
+    calls: list[str] = []
+    handler = RecordEpisodeHandler(
+        authorization=AllowingAuthorization(calls),
+        clock=FixedClock(
+            calls,
+            value=datetime(2026, 7, 27, 8, 30),  # noqa: DTZ001
+        ),
+        identities=MustNotBeUsed(),
+        unit_of_work_factory=MustNotBeUsed(),
+    )
+
+    with pytest.raises(ValueError, match="clock now must be timezone-aware"):
+        await handler.handle(make_command())
+
+    assert calls == ["authorize", "clock.now"]
+
+
+@pytest.mark.asyncio
 async def test_duplicate_returns_existing_id_without_event_and_still_commits(
 ) -> None:
     calls: list[str] = []
@@ -538,7 +611,7 @@ async def test_created_id_mismatch_fails_before_event_or_commit() -> None:
         ),
         (
             "domain",
-            ["authorize", "clock.now", "identities.new_memory_id"],
+            ["authorize", "clock.now"],
         ),
         (
             "factory",

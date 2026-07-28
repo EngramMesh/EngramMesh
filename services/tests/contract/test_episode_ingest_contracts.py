@@ -13,6 +13,7 @@ from engrammesh.modules.memory.application.contracts import (
 from engrammesh.modules.memory.application.errors import (
     EpisodeAuthorizationDenied,
 )
+from engrammesh.modules.memory.domain.errors import EpisodeIdempotencyConflict
 from engrammesh.modules.memory.domain.model import (
     MemoryScope,
     RetentionClass,
@@ -167,6 +168,7 @@ def test_episode_authorization_denied_retains_no_sensitive_input() -> None:
 def test_memory_public_exports_episode_application_contracts() -> None:
     expected_exports = {
         "EpisodeAuthorizationDenied",
+        "EpisodeIdempotencyConflict",
         "RecordEpisodeCommand",
         "RecordEpisodeResult",
     }
@@ -175,6 +177,38 @@ def test_memory_public_exports_episode_application_contracts() -> None:
     assert memory_public.RecordEpisodeCommand is RecordEpisodeCommand
     assert memory_public.RecordEpisodeResult is RecordEpisodeResult
     assert memory_public.EpisodeAuthorizationDenied is EpisodeAuthorizationDenied
+    assert (
+        memory_public.EpisodeIdempotencyConflict
+        is EpisodeIdempotencyConflict
+    )
+
+
+def test_episode_idempotency_conflict_is_final_value_error() -> None:
+    assert issubclass(EpisodeIdempotencyConflict, ValueError)
+    assert EpisodeIdempotencyConflict.__bases__ == (ValueError,)
+    assert EpisodeIdempotencyConflict.__final__
+
+
+def test_episode_idempotency_conflict_retains_no_sensitive_input() -> None:
+    class EpisodeLikePayload:
+        content_hash = "sensitive-content-hash"
+        consent_basis = "sensitive-consent-basis"
+
+    sentinel = EpisodeLikePayload()
+
+    with pytest.raises(TypeError):
+        EpisodeIdempotencyConflict(sentinel)
+    with pytest.raises(TypeError):
+        EpisodeIdempotencyConflict(episode=sentinel)
+
+    error = EpisodeIdempotencyConflict()
+
+    assert tuple(inspect.signature(EpisodeIdempotencyConflict).parameters) == ()
+    assert error.args == ()
+    assert vars(error) == {}
+    assert not hasattr(error, "episode")
+    assert sentinel not in error.args
+    assert sentinel not in vars(error).values()
 
 
 def test_memory_public_does_not_export_episode_infrastructure() -> None:

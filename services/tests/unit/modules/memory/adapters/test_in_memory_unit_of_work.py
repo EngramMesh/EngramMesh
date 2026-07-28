@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
@@ -98,10 +99,11 @@ def make_event(
     *,
     aggregate_id: MemoryId,
     tenant_id: TenantId = TENANT_A,
+    event_type: str = "memory.episode-recorded",
 ) -> EventEnvelope:
     return EventEnvelope(
         event_id=event_id(identifier),
-        event_type="memory.episode-recorded",
+        event_type=event_type,
         schema_version=1,
         tenant_id=tenant_id,
         aggregate_id=aggregate_id,
@@ -191,7 +193,7 @@ async def test_exit_without_commit_discards_real_staged_state() -> None:
 
 
 @pytest.mark.asyncio
-async def test_exception_after_commit_restores_exact_original_state() -> None:
+async def test_exception_after_commit_keeps_final_state() -> None:
     database = InMemoryMemoryDatabase()
     factory = InMemoryMemoryUnitOfWorkFactory(database)
     original_episode = make_episode(1)
@@ -201,29 +203,28 @@ async def test_exception_after_commit_restores_exact_original_state() -> None:
         await unit_of_work.outbox.publish(original_event)
         await unit_of_work.commit()
 
-    original_episode_snapshot = database.episodes
-    original_event_snapshot = database.events
     staged_episode = make_episode(2)
+    staged_event = make_event(2, aggregate_id=staged_episode.id)
 
     with pytest.raises(RuntimeError, match="application failure"):
         async with factory.create() as unit_of_work:
             await unit_of_work.episodes.append(staged_episode)
-            await unit_of_work.outbox.publish(
-                make_event(2, aggregate_id=staged_episode.id)
-            )
+            await unit_of_work.outbox.publish(staged_event)
             await unit_of_work.commit()
+            assert database.episodes == (original_episode, staged_episode)
+            assert database.events == (original_event, staged_event)
             raise RuntimeError("application failure")
 
-    assert database.episodes is original_episode_snapshot
-    assert database.events is original_event_snapshot
+    assert database.episodes == (original_episode, staged_episode)
+    assert database.events == (original_event, staged_event)
 
 
 @pytest.mark.asyncio
-async def test_idempotency_is_scoped_to_exact_tenant_and_keeps_first_id() -> None:
+async def test_exact_replay_is_tenant_scoped_and_keeps_first_id() -> None:
     database = InMemoryMemoryDatabase()
     factory = InMemoryMemoryUnitOfWorkFactory(database)
     first = make_episode(1, idempotency_key="shared-key")
-    same_tenant_duplicate = make_episode(2, idempotency_key="shared-key")
+    same_tenant_duplicate = replace(first, id=memory_id(2))
     other_tenant = make_episode(
         3,
         scope=make_scope(tenant_id=TENANT_B),
@@ -356,10 +357,11 @@ async def test_outbox_preserves_order_and_enforces_correlated_tenant() -> None:
     episode = make_episode(1)
     first = make_event(1, aggregate_id=episode.id)
     second = make_event(2, aggregate_id=episode.id)
-    uncorrelated = make_event(
+    other_event = make_event(
         3,
         aggregate_id=memory_id(99),
         tenant_id=TENANT_B,
+        event_type="memory.projection-requested",
     )
     mismatched = make_event(
         4,
@@ -371,7 +373,7 @@ async def test_outbox_preserves_order_and_enforces_correlated_tenant() -> None:
         await unit_of_work.episodes.append(episode)
         await unit_of_work.outbox.publish(first)
         await unit_of_work.outbox.publish(second)
-        await unit_of_work.outbox.publish(uncorrelated)
+        await unit_of_work.outbox.publish(other_event)
         with pytest.raises(
             ValueError,
             match="outbox event tenant does not match episode tenant",
@@ -379,28 +381,46 @@ async def test_outbox_preserves_order_and_enforces_correlated_tenant() -> None:
             await unit_of_work.outbox.publish(mismatched)
         await unit_of_work.commit()
 
-    assert database.events == (first, second, uncorrelated)
+    assert database.events == (first, second, other_event)
 
 
 @pytest.mark.asyncio
-async def test_outbox_does_not_correlate_against_committed_episodes() -> None:
+async def test_episode_outbox_validates_committed_and_unknown_aggregates() -> None:
     database = InMemoryMemoryDatabase()
     factory = InMemoryMemoryUnitOfWorkFactory(database)
     episode = make_episode(1)
     async with factory.create() as unit_of_work:
         await unit_of_work.episodes.append(episode)
         await unit_of_work.commit()
-    event = make_event(
-        1,
+    matching = make_event(1, aggregate_id=episode.id)
+    mismatched = make_event(
+        2,
         aggregate_id=episode.id,
         tenant_id=TENANT_B,
     )
+    unknown = make_event(3, aggregate_id=memory_id(99))
+    other_event = make_event(
+        4,
+        aggregate_id=memory_id(99),
+        event_type="memory.projection-requested",
+    )
 
     async with factory.create() as unit_of_work:
-        await unit_of_work.outbox.publish(event)
+        await unit_of_work.outbox.publish(matching)
+        with pytest.raises(
+            ValueError,
+            match="outbox event tenant does not match episode tenant",
+        ):
+            await unit_of_work.outbox.publish(mismatched)
+        with pytest.raises(
+            ValueError,
+            match="outbox episode event aggregate is unknown",
+        ):
+            await unit_of_work.outbox.publish(unknown)
+        await unit_of_work.outbox.publish(other_event)
         await unit_of_work.commit()
 
-    assert database.events == (event,)
+    assert database.events == (matching, other_event)
 
 
 @pytest.mark.asyncio

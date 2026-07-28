@@ -93,9 +93,11 @@ def test_contract_registries_are_separate_and_complete() -> None:
     assert episode_names == (
         "first_append_get_stream",
         "exact_scope_denial",
-        "tenant_scoped_replay",
+        "exact_replay",
+        "divergent_idempotency_conflict",
         "different_tenant_same_key",
         "outbox_order",
+        "episode_outbox_integrity",
         "exit_without_commit",
         "exception_after_episode",
         "exception_after_outbox",
@@ -111,7 +113,7 @@ def test_contract_registries_are_separate_and_complete() -> None:
         "cancel_while_queued",
     )
     assert set(episode_names).isdisjoint(capability_names)
-    assert len(episode_names) + len(capability_names) == 16
+    assert len(episode_names) + len(capability_names) == 18
 
 
 @pytest.mark.asyncio

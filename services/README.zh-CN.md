@@ -86,13 +86,15 @@ RecordEpisodeCommand
   -> RecordEpisodeResult(episode_id, created)
 ```
 
-授权在事务开启前完成。无效命令值、领域值和 Adapter 错误会原样向上传播，因为与传输层有关的错误转换不属于本切片。
+授权在事务开启前完成。无效命令值、领域值和 Adapter 错误会原样向上传播，因为与传输层有关的错误转换不属于本切片。Handler 会拒绝无时区的时钟值，并在构造 Episode 或事件前把时钟时间和命令中的 `observed_at` 都规范化为 UTC。
 
 ## 幂等与事务语义
 
-幂等范围是 `(tenant_id, idempotency_key)`。第一次追加返回 `created=True`；同一租户内的重放返回原始 Episode ID 和 `created=False`，且不会暂存第二个事件。不同租户可以复用同一键。
+幂等范围是 `(tenant_id, idempotency_key)`。第一次追加返回 `created=True`。只有在 Scope、Actor、来源类型、内容引用、观察时间、内容哈希、敏感级别、保留类别和同意依据全部匹配时，冲突才属于精确重放；生成的 Episode ID 和 `ingested_at` 不参与比较。精确重放返回原始 Episode ID 和 `created=False`，且不会暂存第二个事件；任何请求派生字段不同都会抛出不携带载荷的 `EpisodeIdempotencyConflict`，且不改变状态。不同租户可以复用同一键。
 
-内存 Adapter 使用一个进程内锁串行化事务，并采用写时复制状态。`commit()` 暂存新的已提交快照，而成功退出上下文才完成事务。未调用 `commit()` 就退出、抛出异常或被取消，都会丢弃暂存的 Episode、幂等索引与 Outbox 变更。在 `commit()` 之后、成功退出上下文之前发生异常或取消时，会恢复事务前快照。这是用于本地测试/开发的原子模型，不是生产级并发或持久化模型。
+内存 Adapter 使用一个进程内锁串行化事务，并采用写时复制状态。成功的 `commit()` 会让新快照立即成为最终状态并全局可见；之后事务体抛出异常、被取消或退出上下文，都不会恢复旧状态。未调用 `commit()` 就退出时，仍会丢弃暂存的 Episode、幂等索引与 Outbox 变更。
+
+对于 `memory.episode-recorded`，Outbox 发布要求聚合 Episode 在当前事务中可见（无论是此前已提交还是本次新暂存），并要求信封租户与 Episode 租户一致。未知或跨租户的 Episode 聚合会被拒绝；其他事件类型不受这条 Episode 关联规则约束。所有接受的带时区时间都会以规范 UTC 序列化。这些行为是用于本地测试/开发的原子模型，不是生产级并发、持久化或外部投递模型。
 
 ## 运行示例
 
