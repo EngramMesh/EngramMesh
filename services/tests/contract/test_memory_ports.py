@@ -41,7 +41,9 @@ from engrammesh.modules.memory.ports import (
     MemoryRerankerPort,
     MemoryUnitOfWork,
     MemoryUnitOfWorkFactory,
+    OutboxEventPublisher,
     OutboxPort,
+    OutboxRelayStore,
 )
 from engrammesh.modules.memory.public import __all__ as public_exports
 from engrammesh.shared.kernel.events import EventEnvelope
@@ -66,6 +68,8 @@ PROTOCOLS = (
     ClockPort,
     MemoryIdentityPort,
     OutboxPort,
+    OutboxRelayStore,
+    OutboxEventPublisher,
     MemoryUnitOfWorkFactory,
 )
 
@@ -81,6 +85,8 @@ EXPECTED_METHODS = {
     ClockPort: ("now",),
     MemoryIdentityPort: ("new_memory_id", "new_event_id"),
     OutboxPort: ("publish",),
+    OutboxRelayStore: ("fetch_unpublished", "mark_published", "count_unpublished"),
+    OutboxEventPublisher: ("publish",),
     MemoryUnitOfWorkFactory: ("create",),
 }
 
@@ -189,6 +195,7 @@ DATACLASS_SHAPES = {
 
 EMPTY = inspect.Signature.empty
 PARAMETER = inspect.Parameter.POSITIONAL_OR_KEYWORD
+KEYWORD_ONLY = inspect.Parameter.KEYWORD_ONLY
 PROTOCOL_SIGNATURES = {
     EpisodeStore.append: (
         (("self", EMPTY, EMPTY), ("episode", Episode, EMPTY)),
@@ -303,6 +310,26 @@ PROTOCOL_SIGNATURES = {
         (("self", EMPTY, EMPTY), ("event", EventEnvelope, EMPTY)),
         None,
     ),
+    OutboxRelayStore.fetch_unpublished: (
+        (("self", EMPTY, EMPTY), ("limit", int, EMPTY)),
+        tuple[EventEnvelope, ...],
+    ),
+    OutboxRelayStore.mark_published: (
+        (
+            ("self", EMPTY, EMPTY),
+            ("event_ids", tuple[EventId, ...], EMPTY),
+            ("published_at", datetime, EMPTY),
+        ),
+        None,
+    ),
+    OutboxRelayStore.count_unpublished: (
+        (("self", EMPTY, EMPTY),),
+        int,
+    ),
+    OutboxEventPublisher.publish: (
+        (("self", EMPTY, EMPTY), ("event", EventEnvelope, EMPTY)),
+        None,
+    ),
     MemoryUnitOfWorkFactory.create: (
         (("self", EMPTY, EMPTY),),
         MemoryUnitOfWork,
@@ -387,7 +414,16 @@ def test_protocol_methods_have_exact_signatures(
         )
         for parameter in signature.parameters.values()
     ) == tuple(
-        (name, annotation, default, PARAMETER)
+        (
+            name,
+            annotation,
+            default,
+            KEYWORD_ONLY if name != "self" and method in (
+                OutboxRelayStore.fetch_unpublished,
+                OutboxRelayStore.mark_published,
+            )
+            else PARAMETER,
+        )
         for name, annotation, default in expected_parameters
     )
     assert signature.return_annotation == expected_return

@@ -58,3 +58,20 @@ class RecordEpisodeResult:
 
     episode_id: MemoryId
     created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RelayOutboxCommand:
+    """Request to relay one batch of unpublished outbox events."""
+
+    batch_size: int
+
+
+@dataclass(frozen=True, slots=True)
+class RelayOutboxResult:
+    """Outcome of relaying one batch of unpublished outbox events."""
+
+    fetched: int
+    dispatched: int
+    published: int
+    remaining_unpublished: int

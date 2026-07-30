@@ -205,6 +205,29 @@ class OutboxPort(Protocol):
 
 
 @runtime_checkable
+class OutboxRelayStore(Protocol):
+    """Unpublished outbox polling and publication marking boundary."""
+
+    async def fetch_unpublished(self, *, limit: int) -> tuple[EventEnvelope, ...]: ...
+
+    async def mark_published(
+        self,
+        *,
+        event_ids: tuple[EventId, ...],
+        published_at: datetime,
+    ) -> None: ...
+
+    async def count_unpublished(self) -> int: ...
+
+
+@runtime_checkable
+class OutboxEventPublisher(Protocol):
+    """Relay dispatch boundary for published outbox events."""
+
+    async def publish(self, event: EventEnvelope) -> None: ...
+
+
+@runtime_checkable
 class MemoryUnitOfWork(Protocol):
     """Atomic episode and claim persistence boundary."""
 
