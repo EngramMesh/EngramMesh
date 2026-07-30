@@ -96,6 +96,21 @@ def test_record_episode_handler_when_memory_disabled_raises() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runtime_async_context_manager_lifecycle() -> None:
+    runtime = create_runtime(_test_settings())
+    with patch(
+        "engrammesh.bootstrap.composition.PostgresMemoryDatabase"
+    ) as database_cls:
+        database = database_cls.return_value
+        database.open = AsyncMock()
+        database.close = AsyncMock()
+        async with runtime:
+            database.open.assert_awaited_once()
+            runtime.record_episode_handler()
+        database.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_record_episode_handler_returns_cached_handler() -> None:
     runtime = create_runtime(_test_settings())
     with patch(

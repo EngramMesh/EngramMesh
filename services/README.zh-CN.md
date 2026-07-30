@@ -4,9 +4,9 @@
 
 ## 目的与明确的非目标
 
-本目录包含经过测试的 EngramMesh Python 3.14 服务架构脚手架，以及一个经过测试的 Episode 摄取应用切片。它定义了不可变的共享标识符与事件元数据、记忆模块和持久化运行时的公共契约、依赖规则、类型化进程配置、带版本的 JSON Schema 事件契约，以及仅用于测试与开发的事务型内存 Adapter。
+本目录包含经过测试的 EngramMesh Python 3.14 服务架构脚手架，以及一个经过测试的 Episode 摄取应用切片。它定义了不可变的共享标识符与事件元数据、记忆模块和持久化运行时的公共契约、依赖规则、类型化进程配置、从设置装配 PostgreSQL Handler 的组合根、带版本的 JSON Schema 事件契约，以及仅用于测试与开发的事务型内存 Adapter。
 
-它**不**包含可运行服务、依赖注入容器、生产数据库或 Temporal 客户端、API、Worker、外部事件分发器、模型或工具集成、投影流水线或可部署产品功能。内存 Adapter 仅在单个进程内保存状态，并不持久化。测试通过只能证明本文所述应用契约与架构契约成立，并不表示已经存在可部署的运行时。
+它**不**包含可运行的 HTTP 服务器、Worker 进程或外部事件分发器、依赖注入框架、生产 Temporal 客户端、API 表面、模型或工具集成、投影流水线或可部署产品功能。内存 Adapter 仅在单个进程内保存状态，并不持久化。测试通过只能证明本文所述应用契约与架构契约成立，并不表示已经存在可部署的运行时。
 
 ## 模块树
 
@@ -14,6 +14,8 @@
 services/
 ├── src/engrammesh/
 │   ├── bootstrap/
+│   │   ├── composition.py    # AppRuntime 组合根
+│   │   ├── infrastructure.py # 默认时钟、标识符与授权 Port
 │   │   └── settings.py       # 类型化、不可变的配置边界
 │   ├── modules/
 │   │   ├── memory/
@@ -49,7 +51,7 @@ packages/contracts/jsonschema/
 bootstrap/配置              模块公共契约
       |                           |
       v                           v
-未来组合根 -> 应用服务 -> Port -> 领域层
+bootstrap/composition.py -> 应用服务 -> Port -> 领域层
                             |
                             v
                           共享内核
@@ -73,7 +75,7 @@ PostgreSQL 驱动、Temporal SDK、模型提供方、工具协议、对象存储
 
 `RecordEpisodeHandler` 是一个与框架无关的应用服务。它先完成授权，再使用注入的时钟与标识符 Port，按内容引用记录一个不可变 `Episode`。具体持久化实现包括 `InMemoryMemoryUnitOfWorkFactory`（进程内）和 `PostgresMemoryUnitOfWorkFactory`（持久化 PostgreSQL）。PostgreSQL 类型应从 `engrammesh.modules.memory.adapters.postgres` 导入，而非顶层 `engrammesh.modules.memory.adapters` 包（该包仅导出内存 Adapter）。
 
-本切片明确不包含 HTTP、依赖注入装配、`PostgresSettings` 组合根绑定、Temporal、对象上传、Claim 提取、检索、纠正与删除、投影，以及外部 Outbox 分发。内存 Adapter 不提供跨进程持久性或投递保证。
+本切片明确不包含 HTTP、依赖注入框架装配、Temporal、对象上传、Claim 提取、检索、纠正与删除、投影，以及外部 Outbox 分发。内存 Adapter 不提供跨进程持久性或投递保证。
 
 ## 应用流程
 
@@ -111,7 +113,7 @@ from engrammesh.modules.memory.adapters.postgres import (
 
 `EPISODE_ADAPTER_CONTRACTS` 中的可移植 Episode 断言通过 PostgreSQL Harness 绑定，不修改共享断言主体。PostgreSQL 能力契约（`POSTGRES_EPISODE_CAPABILITY_CONTRACTS`）单独描述不可用的 Claim 操作与被拒绝的非 `None` 流游标。
 
-租户隔离通过 SQL 谓词强制（每次读写均带 `tenant_id`）。PostgreSQL 行级安全（RLS）策略推迟到后续生产加固切片。`PostgresSettings` 已存在于 `bootstrap/settings.py`，但本切片未将其接入 Adapter；未来的组合根将读取 `ENGRAMMESH__POSTGRES__DSN` 并构造 `PostgresMemoryDatabase`。
+租户隔离通过 SQL 谓词强制（每次读写均带 `tenant_id`）。PostgreSQL 行级安全（RLS）策略推迟到后续生产加固切片。`PostgresSettings` 通过 `AppSettings` 读取，并在 memory 启用时由 `bootstrap/composition.py` 装配。
 
 ### 本地 PostgreSQL 测试
 
@@ -129,6 +131,88 @@ ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engr
 ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engrammesh \
   uv run --python 3.14 --project services pytest services/tests -q
 ```
+
+## 组合根
+
+`bootstrap/composition.py` 是官方组合根。它读取类型化 `AppSettings`，在启动时打开 PostgreSQL 连接池，并返回装配了基础设施 Port 的缓存 `RecordEpisodeHandler`。只有 bootstrap 可以导入 `engrammesh.modules.memory.adapters.postgres` 并装配应用服务。
+
+```python
+from engrammesh.bootstrap.composition import create_runtime, load_settings
+```
+
+`load_settings()` 是 `AppSettings()` 的薄封装，提供单一配置入口。`create_runtime()` 可接受可选 settings，默认调用 `load_settings()`；在显式调用生命周期方法或使用 async 上下文管理器之前不会执行 `startup()`。
+
+```bash
+export ENGRAMMESH__ENVIRONMENT=test
+export ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engrammesh
+export ENGRAMMESH__TEMPORAL__NAMESPACE=demo
+export ENGRAMMESH__TEMPORAL__TASK_QUEUE=demo
+PYTHONPATH=services/src PYTHONDONTWRITEBYTECODE=1 \
+  uv run --python 3.14 --project services python - <<'PY'
+import asyncio
+from datetime import UTC, datetime
+from uuid import UUID
+
+from engrammesh.bootstrap.composition import create_runtime, load_settings
+from engrammesh.modules.memory.application.contracts import RecordEpisodeCommand
+from engrammesh.modules.memory.domain.model import (
+    MemoryScope,
+    RetentionClass,
+    Sensitivity,
+    SourceType,
+)
+from engrammesh.shared.kernel.ids import (
+    ArtifactId,
+    CorrelationId,
+    SubjectId,
+    TenantId,
+)
+
+
+async def main() -> None:
+    async with create_runtime(load_settings()) as runtime:
+        handler = runtime.record_episode_handler()
+        command = RecordEpisodeCommand(
+            correlation_id=CorrelationId(UUID(int=3)),
+            actor_id=SubjectId(UUID(int=4)),
+            scope=MemoryScope(
+                tenant_id=TenantId(UUID(int=5)),
+                subject_id=SubjectId(UUID(int=6)),
+                workspace_id="demo",
+            ),
+            source_type=SourceType.USER,
+            content_ref=ArtifactId(UUID(int=7)),
+            observed_at=datetime(2026, 7, 27, 9, 0, tzinfo=UTC),
+            content_hash="sha256:demo",
+            idempotency_key="demo-composed-episode",
+            sensitivity=Sensitivity.CONFIDENTIAL,
+            retention_class=RetentionClass.STANDARD,
+            consent_basis="user_request",
+        )
+        first = await handler.handle(command)
+        replay = await handler.handle(command)
+        print(f"first_created={first.created} replay_created={replay.created}")
+        print(f"same_id={first.episode_id == replay.episode_id}")
+
+
+asyncio.run(main())
+PY
+```
+
+当 `modules.memory_enabled` 为 `False` 时，`record_episode_handler()` 抛出 code 为 `memory_disabled` 的 `ConfigurationError`。当 memory 已启用但 `startup()` 尚未完成时，抛出消息为 `application runtime is not started` 的 `RuntimeError`。
+
+### 环境门控授权
+
+`EnvironmentGatedMemoryAuthorization` 为组合 Handler 实现 `MemoryAuthorizationPort`。在 OIDC 切片落地之前，授权由 `ENGRAMMESH__ENVIRONMENT` 门控：
+
+| `Environment` | `authorize(...)` 结果 |
+|---------------|----------------------|
+| `development` | 所有请求返回 `True` |
+| `test`        | 所有请求返回 `True` |
+| `staging`     | 所有请求返回 `False` |
+| `production`  | 所有请求返回 `False` |
+
+授权被拒绝时，`RecordEpisodeHandler` 会抛出 `EpisodeAuthorizationDenied`（现有应用行为）。
 
 ## 运行示例
 
@@ -259,6 +343,6 @@ ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engr
 
 PostgreSQL Episode Adapter 已通过其类型化 Harness 绑定 `tests/contract/memory_adapter_contract.py` 中 `EPISODE_ADAPTER_CONTRACTS` 的每个断言，且未修改可复用断言主体。核心 Registry 不假定单一全局锁，也不要求 Claim 操作或游标不可用。可复用断言模块只导入公共记忆 Port、领域值与共享契约；应用编排由其他测试单独验证。`IN_MEMORY_CAPABILITY_CONTRACTS` 与 `POSTGRES_EPISODE_CAPABILITY_CONTRACTS` 分别描述各 Adapter 的不可用 Claim、拒绝游标与同步模型。
 
-生产 PostgreSQL 的后续工作包括行级安全（RLS）策略、通过显式组合根接入 `PostgresSettings`，以及 Episode 摄取之外的更广泛记忆表面。新增共享能力行为需要单独评审的契约 Profile，而不是修改可移植 Episode 断言主体。
+生产 PostgreSQL 的后续工作包括行级安全（RLS）策略，以及 Episode 摄取之外的更广泛记忆表面。下一个应用切片是 Outbox Relay（轮询 `memory_outbox_events` 并设置 `published_at`）。新增共享能力行为需要单独评审的契约 Profile，而不是修改可移植 Episode 断言主体。
 
 经过单独设计评审后，后续阶段可增加 Temporal Adapter、API、Worker 与外部事件分发。它们必须保留上述依赖与权威边界；本指南不预先授权任何供应商或可部署产品功能。
