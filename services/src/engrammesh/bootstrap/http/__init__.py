@@ -1,5 +1,6 @@
 """HTTP transport boundaries for bootstrap."""
 
+from engrammesh.bootstrap.http.app import create_app
 from engrammesh.bootstrap.http.errors import error_envelope, register_exception_handlers
 from engrammesh.bootstrap.http.mappers import (
     InvalidCorrelationIdError,
@@ -20,6 +21,7 @@ __all__ = [
     "RecordEpisodeResponse",
     "ScopeRequest",
     "TenantMismatchError",
+    "create_app",
     "error_envelope",
     "parse_correlation_id",
     "register_exception_handlers",
