@@ -144,3 +144,27 @@ def test_memory_outbox_events_has_publication_order_index(
     indexes = _index_names(migrated_postgres_connection, "memory_outbox_events")
 
     assert "memory_outbox_events_tenant_occurred_event_idx" in indexes
+
+
+def test_memory_outbox_events_has_unpublished_order_partial_index(
+    migrated_postgres_connection: Connection,
+) -> None:
+    indexes = _index_names(migrated_postgres_connection, "memory_outbox_events")
+
+    assert "memory_outbox_events_unpublished_order_idx" in indexes
+
+    row = migrated_postgres_connection.execute(
+        """
+        SELECT indexdef
+        FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND tablename = 'memory_outbox_events'
+          AND indexname = 'memory_outbox_events_unpublished_order_idx'
+        """
+    ).fetchone()
+    assert row is not None
+
+    indexdef = row[0].lower()
+    assert "published_at is null" in indexdef
+    assert "occurred_at" in indexdef
+    assert "event_id" in indexdef
