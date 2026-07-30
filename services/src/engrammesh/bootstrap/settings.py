@@ -93,6 +93,14 @@ class ModuleSettings(_FrozenSettingsModel):
     runtime_enabled: bool = True
 
 
+class HttpSettings(_FrozenSettingsModel):
+    """HTTP server binding and enablement boundary."""
+
+    enabled: bool = True
+    host: str = "127.0.0.1"
+    port: int = 8080
+
+
 class OutboxRelaySettings(_FrozenSettingsModel):
     """Outbox relay polling and batch dispatch boundary."""
 
@@ -134,6 +142,7 @@ class AppSettings(BaseSettings):
     temporal: TemporalSettings
     telemetry: TelemetrySettings = TelemetrySettings()
     modules: ModuleSettings = ModuleSettings()
+    http: HttpSettings = HttpSettings()
     outbox_relay: OutboxRelaySettings = OutboxRelaySettings()
 
     @model_validator(mode="after")

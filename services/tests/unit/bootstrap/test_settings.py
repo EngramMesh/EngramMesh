@@ -8,6 +8,7 @@ from engrammesh.bootstrap.settings import (
     AppSettings,
     ConfigurationError,
     Environment,
+    HttpSettings,
     ModuleSettings,
     OutboxRelaySettings,
     PostgresSettings,
@@ -20,6 +21,7 @@ EXPECTED_MODEL_FIELDS: Mapping[type[object], tuple[str, ...]] = {
     TemporalSettings: ("address", "namespace", "task_queue", "tls"),
     TelemetrySettings: ("otlp_endpoint", "capture_sensitive_content"),
     ModuleSettings: ("memory_enabled", "runtime_enabled"),
+    HttpSettings: ("enabled", "host", "port"),
     OutboxRelaySettings: ("enabled", "batch_size", "poll_interval_seconds"),
     AppSettings: (
         "configuration_schema_version",
@@ -28,6 +30,7 @@ EXPECTED_MODEL_FIELDS: Mapping[type[object], tuple[str, ...]] = {
         "temporal",
         "telemetry",
         "modules",
+        "http",
         "outbox_relay",
     ),
 }
@@ -326,6 +329,18 @@ def test_temporal_namespace_and_task_queue_are_required_and_non_blank(
 
     with pytest.raises(ValidationError):
         _settings(temporal=temporal)
+
+
+def test_http_settings_defaults() -> None:
+    settings = AppSettings.model_validate(
+        {
+            "environment": "test",
+            "postgres": {"dsn": "postgresql://localhost/test"},
+            "temporal": {"namespace": "demo", "task_queue": "demo"},
+        }
+    )
+    assert settings.http.port == 8080
+    assert settings.http.enabled is True
 
 
 def test_configuration_snapshot_has_an_explicit_semantic_version() -> None:
