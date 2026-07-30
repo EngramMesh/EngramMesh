@@ -27,7 +27,9 @@ services/
 │   │   └── settings.py       # typed, immutable configuration boundary
 │   ├── modules/
 │   │   ├── memory/
-│   │   │   ├── adapters/     # in-memory test/development transaction adapter
+│   │   │   ├── adapters/     # in-memory and PostgreSQL transaction adapters
+│   │   │   │   ├── in_memory/  # process-local test/development adapter
+│   │   │   │   └── postgres/   # durable Episode/Outbox adapter (psycopg)
 │   │   │   ├── application/  # framework-neutral Episode ingest orchestration
 │   │   │   ├── domain/       # pure cognitive-memory values and invariants
 │   │   │   ├── ports.py      # implementation-neutral boundaries
@@ -75,8 +77,10 @@ code must never depend outward on a concrete adapter.
 
 ## Authoritative-state boundaries
 
-- PostgreSQL is the future authority for memory facts, versioned records,
-  append-only events, and durable structured snapshots.
+- PostgreSQL is the authority for durable memory facts, versioned records,
+  append-only events, and durable structured snapshots. The PostgreSQL Episode
+  adapter in this slice implements Episode ingest persistence; broader memory
+  surfaces and row-level security policies remain follow-up work.
 - Temporal Event History is the future authority for execution lifecycle,
   timers, retries, and durable workflow progress.
 - Object storage is the future authority for large content addressed by
@@ -102,14 +106,17 @@ adapter use case; it is not added speculatively.
 
 `RecordEpisodeHandler` is a framework-neutral application service. It records
 one immutable `Episode` by artifact reference after authorization, using
-injected clock and identity ports. The only concrete persistence implementation
-is `InMemoryMemoryUnitOfWorkFactory`, backed by
-`InMemoryMemoryDatabase`, for deterministic tests and local development.
+injected clock and identity ports. Concrete persistence implementations are `InMemoryMemoryUnitOfWorkFactory`
+(process-local) and `PostgresMemoryUnitOfWorkFactory` (durable PostgreSQL).
+Import PostgreSQL types from `engrammesh.modules.memory.adapters.postgres`,
+not from the top-level `engrammesh.modules.memory.adapters` package, which
+exports only the in-memory adapter.
 
-The slice deliberately excludes HTTP, dependency-injection wiring, PostgreSQL,
-ORMs and migrations, Temporal, object upload, Claim extraction, retrieval,
-correction and deletion, projections, and external Outbox dispatch. It makes no
-cross-process durability or delivery guarantee.
+The slice deliberately excludes HTTP, dependency-injection wiring,
+`PostgresSettings` composition-root binding, Temporal, object upload, Claim
+extraction, retrieval, correction and deletion, projections, and external
+Outbox dispatch. The in-memory adapter makes no cross-process durability or
+delivery guarantee.
 
 ## Application flow
 
@@ -157,6 +164,52 @@ cross-tenant Episode aggregates are rejected. Other event types are outside
 this Episode correlation rule. Accepted aware timestamps are serialized in
 canonical UTC. These behaviors are an atomic local test/development model, not
 a production concurrency, durability, or external-delivery model.
+
+## PostgreSQL Episode adapter
+
+`PostgresMemoryDatabase` and `PostgresMemoryUnitOfWorkFactory` provide a
+transaction-scoped Episode store, unavailable Claim store, and Outbox port
+backed by versioned SQL migrations and a psycopg3 async connection pool. Only
+`engrammesh.modules.memory.adapters.postgres` may import `psycopg`; domain,
+application, and port modules remain provider-neutral.
+
+```python
+from engrammesh.modules.memory.adapters.postgres import (
+    PostgresMemoryDatabase,
+    PostgresMemoryUnitOfWorkFactory,
+)
+```
+
+Portable Episode assertions in `EPISODE_ADAPTER_CONTRACTS` bind through a
+PostgreSQL harness without changing the shared assertion bodies. PostgreSQL
+capability contracts (`POSTGRES_EPISODE_CAPABILITY_CONTRACTS`) separately
+describe unavailable Claim operations and rejected non-`None` stream cursors.
+
+Tenant isolation is enforced in SQL predicates (`tenant_id` on every read and
+write). PostgreSQL row-level security (RLS) policies are deferred to a later
+production-hardening slice. `PostgresSettings` exists in
+`bootstrap/settings.py` but is not wired into the adapter here; a future
+composition root will read `ENGRAMMESH__POSTGRES__DSN` and construct
+`PostgresMemoryDatabase`.
+
+### Local PostgreSQL tests
+
+Set a DSN and run postgres-marked tests. When `ENGRAMMESH__POSTGRES__DSN` is
+unset, `@pytest.mark.postgres` tests skip. Tests that share one database run
+serially via the `postgres_serial` xdist group:
+
+```bash
+export ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engrammesh
+ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engrammesh \
+  uv run --python 3.14 --project services pytest services/tests -m postgres -q
+```
+
+Run the full services suite (postgres and non-postgres) with the same DSN:
+
+```bash
+ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engrammesh \
+  uv run --python 3.14 --project services pytest services/tests -q
+```
 
 ## Run the example
 
@@ -266,7 +319,8 @@ From the repository root, use the locked Python 3.14 environment:
 uv lock --check --python 3.14 --project services
 uv run --python 3.14 --project services pytest \
   services/tests/contract/test_in_memory_memory_adapter_contract.py -q
-uv run --python 3.14 --project services pytest services/tests -q
+ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engrammesh \
+  uv run --python 3.14 --project services pytest services/tests -q
 uv run --python 3.14 --project services ruff check services/src services/tests
 uv run --python 3.14 --project services mypy services/src
 for suite in tools dco history links workflow orchestration external baseline yaml; do
@@ -274,31 +328,37 @@ for suite in tools dco history links workflow orchestration external baseline ya
 done
 ```
 
+PostgreSQL-only verification (serial when xdist loadgroup is enabled):
+
+```bash
+ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engrammesh \
+  uv run --python 3.14 --project services pytest services/tests -m postgres -q
+```
+
 Configuration is read from `ENGRAMMESH__` variables with `__` between nested
 fields, for example `ENGRAMMESH__TEMPORAL__NAMESPACE`. There is no implicit
 `.env` loading. Production validation fails closed for sensitive telemetry
 capture, requires PostgreSQL `sslmode=verify-full`, and requires Temporal TLS.
 
-## Next adapter obligation
+## Adapter contract obligations
 
-A future PostgreSQL Episode adapter must bind every assertion in
-`EPISODE_ADAPTER_CONTRACTS` from
-`tests/contract/memory_adapter_contract.py` through its own typed harness without
-changing the reusable assertion bodies. That core registry does not assume one
-global lock and does not require Claim operations or cursors to be unavailable.
-Its reusable assertion module imports only public memory ports, domain values,
-and shared contracts; application orchestration is tested separately.
-`IN_MEMORY_CAPABILITY_CONTRACTS` separately describes the current in-memory
-adapter's unavailable Claims, rejected cursors, and cancellation while queued
-on its process-global lock. Another adapter binds a capability profile only
-when that capability and synchronization model apply.
+The PostgreSQL Episode adapter binds every assertion in
+`EPISODE_ADAPTER_CONTRACTS` from `tests/contract/memory_adapter_contract.py`
+through its typed harness without changing the reusable assertion bodies. The
+core registry does not assume one global lock and does not require Claim
+operations or cursors to be unavailable. Its reusable assertion module imports
+only public memory ports, domain values, and shared contracts; application
+orchestration is tested separately. `IN_MEMORY_CAPABILITY_CONTRACTS` and
+`POSTGRES_EPISODE_CAPABILITY_CONTRACTS` separately describe each adapter's
+unavailable Claims, rejected cursors, and synchronization model.
 
-The PostgreSQL adapter must also add PostgreSQL-specific integration coverage
-for migrations, constraints, transaction isolation, tenant enforcement, and
-failure behavior. New shared capability behavior requires a separately reviewed
-contract profile rather than edits to the portable Episode assertion bodies.
+Follow-up work for production PostgreSQL includes row-level security policies,
+`PostgresSettings` wiring through an explicit composition root, and broader
+memory surfaces beyond Episode ingest. New shared capability behavior requires
+a separately reviewed contract profile rather than edits to the portable
+Episode assertion bodies.
 
-After separate design review, later phases may add an explicit composition root,
-PostgreSQL or Temporal adapters, migrations, APIs, workers, and external event
-dispatch. They must preserve the dependency and authority boundaries above;
-this guide does not pre-authorize any vendor or deployable product feature.
+After separate design review, later phases may add Temporal adapters, APIs,
+workers, and external event dispatch. They must preserve the dependency and
+authority boundaries above; this guide does not pre-authorize any vendor or
+deployable product feature.

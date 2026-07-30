@@ -17,7 +17,9 @@ services/
 │   │   └── settings.py       # 类型化、不可变的配置边界
 │   ├── modules/
 │   │   ├── memory/
-│   │   │   ├── adapters/     # 用于测试/开发的内存事务 Adapter
+│   │   │   ├── adapters/     # 内存与 PostgreSQL 事务 Adapter
+│   │   │   │   ├── in_memory/  # 进程内测试/开发 Adapter
+│   │   │   │   └── postgres/   # 持久化 Episode/Outbox Adapter（psycopg）
 │   │   │   ├── application/  # 与框架无关的 Episode 摄取编排
 │   │   │   ├── domain/       # 纯认知记忆值对象与不变量
 │   │   │   ├── ports.py      # 与实现无关的边界
@@ -57,7 +59,7 @@ bootstrap/配置              模块公共契约
 
 ## 权威状态边界
 
-- PostgreSQL 将作为记忆事实、版本化记录、追加事件和持久化结构快照的权威来源。
+- PostgreSQL 是持久化记忆事实、版本化记录、追加事件和持久化结构快照的权威来源。本切片中的 PostgreSQL Episode Adapter 实现了 Episode 摄取持久化；更广泛的记忆表面与行级安全（RLS）策略仍属后续工作。
 - Temporal Event History 将作为执行生命周期、定时器、重试和持久化工作流进度的权威来源。
 - 对象存储将作为由不可变引用寻址的大型内容的权威来源。
 - 向量索引、图存储、缓存、搜索索引和遥测是可重建投影或运行信号，绝不是主要权威来源。
@@ -69,9 +71,9 @@ PostgreSQL 驱动、Temporal SDK、模型提供方、工具协议、对象存储
 
 ## Episode 摄取切片
 
-`RecordEpisodeHandler` 是一个与框架无关的应用服务。它先完成授权，再使用注入的时钟与标识符 Port，按内容引用记录一个不可变 `Episode`。当前唯一具体的持久化实现是由 `InMemoryMemoryDatabase` 支持的 `InMemoryMemoryUnitOfWorkFactory`，仅供确定性测试和本地开发使用。
+`RecordEpisodeHandler` 是一个与框架无关的应用服务。它先完成授权，再使用注入的时钟与标识符 Port，按内容引用记录一个不可变 `Episode`。具体持久化实现包括 `InMemoryMemoryUnitOfWorkFactory`（进程内）和 `PostgresMemoryUnitOfWorkFactory`（持久化 PostgreSQL）。PostgreSQL 类型应从 `engrammesh.modules.memory.adapters.postgres` 导入，而非顶层 `engrammesh.modules.memory.adapters` 包（该包仅导出内存 Adapter）。
 
-本切片明确不包含 HTTP、依赖注入装配、PostgreSQL、ORM 与迁移、Temporal、对象上传、Claim 提取、检索、纠正与删除、投影，以及外部 Outbox 分发。它不提供跨进程持久性或投递保证。
+本切片明确不包含 HTTP、依赖注入装配、`PostgresSettings` 组合根绑定、Temporal、对象上传、Claim 提取、检索、纠正与删除、投影，以及外部 Outbox 分发。内存 Adapter 不提供跨进程持久性或投递保证。
 
 ## 应用流程
 
@@ -95,6 +97,38 @@ RecordEpisodeCommand
 内存 Adapter 使用一个进程内锁串行化事务，并采用写时复制状态。成功的 `commit()` 会让新快照立即成为最终状态并全局可见；之后事务体抛出异常、被取消或退出上下文，都不会恢复旧状态。未调用 `commit()` 就退出时，仍会丢弃暂存的 Episode、幂等索引与 Outbox 变更。
 
 对于 `memory.episode-recorded`，Outbox 发布要求聚合 Episode 在当前事务中可见（无论是此前已提交还是本次新暂存），并要求信封租户与 Episode 租户一致。未知或跨租户的 Episode 聚合会被拒绝；其他事件类型不受这条 Episode 关联规则约束。所有接受的带时区时间都会以规范 UTC 序列化。这些行为是用于本地测试/开发的原子模型，不是生产级并发、持久化或外部投递模型。
+
+## PostgreSQL Episode Adapter
+
+`PostgresMemoryDatabase` 与 `PostgresMemoryUnitOfWorkFactory` 提供事务作用域内的 Episode 存储、不可用的 Claim 存储和 Outbox Port，由带版本 SQL 迁移与 psycopg3 异步连接池支撑。仅 `engrammesh.modules.memory.adapters.postgres` 可导入 `psycopg`；领域、应用与 Port 模块保持与提供方无关。
+
+```python
+from engrammesh.modules.memory.adapters.postgres import (
+    PostgresMemoryDatabase,
+    PostgresMemoryUnitOfWorkFactory,
+)
+```
+
+`EPISODE_ADAPTER_CONTRACTS` 中的可移植 Episode 断言通过 PostgreSQL Harness 绑定，不修改共享断言主体。PostgreSQL 能力契约（`POSTGRES_EPISODE_CAPABILITY_CONTRACTS`）单独描述不可用的 Claim 操作与被拒绝的非 `None` 流游标。
+
+租户隔离通过 SQL 谓词强制（每次读写均带 `tenant_id`）。PostgreSQL 行级安全（RLS）策略推迟到后续生产加固切片。`PostgresSettings` 已存在于 `bootstrap/settings.py`，但本切片未将其接入 Adapter；未来的组合根将读取 `ENGRAMMESH__POSTGRES__DSN` 并构造 `PostgresMemoryDatabase`。
+
+### 本地 PostgreSQL 测试
+
+设置 DSN 后运行带 `postgres` 标记的测试。未设置 `ENGRAMMESH__POSTGRES__DSN` 时，`@pytest.mark.postgres` 测试会跳过。共享同一数据库的测试通过 `postgres_serial` xdist 组串行执行：
+
+```bash
+export ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engrammesh
+ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engrammesh \
+  uv run --python 3.14 --project services pytest services/tests -m postgres -q
+```
+
+使用相同 DSN 运行完整 services 套件（postgres 与非 postgres）：
+
+```bash
+ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engrammesh \
+  uv run --python 3.14 --project services pytest services/tests -q
+```
 
 ## 运行示例
 
@@ -203,7 +237,8 @@ same_id=True episodes=1 events=1
 uv lock --check --python 3.14 --project services
 uv run --python 3.14 --project services pytest \
   services/tests/contract/test_in_memory_memory_adapter_contract.py -q
-uv run --python 3.14 --project services pytest services/tests -q
+ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engrammesh \
+  uv run --python 3.14 --project services pytest services/tests -q
 uv run --python 3.14 --project services ruff check services/src services/tests
 uv run --python 3.14 --project services mypy services/src
 for suite in tools dco history links workflow orchestration external baseline yaml; do
@@ -211,12 +246,19 @@ for suite in tools dco history links workflow orchestration external baseline ya
 done
 ```
 
+仅 PostgreSQL 验证（启用 xdist loadgroup 时串行）：
+
+```bash
+ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engrammesh \
+  uv run --python 3.14 --project services pytest services/tests -m postgres -q
+```
+
 配置从 `ENGRAMMESH__` 变量读取，并用 `__` 分隔嵌套字段，例如 `ENGRAMMESH__TEMPORAL__NAMESPACE`。系统不会隐式加载 `.env`。生产环境验证对敏感遥测内容采集采取关闭失败策略，要求 PostgreSQL 使用 `sslmode=verify-full`，并要求 Temporal 启用 TLS。
 
-## 下一 Adapter 的义务
+## Adapter 契约义务
 
-未来的 PostgreSQL Episode Adapter 必须通过自己的类型化测试 Harness 绑定 `tests/contract/memory_adapter_contract.py` 中 `EPISODE_ADAPTER_CONTRACTS` 的每个断言，且不得修改可复用断言主体。该核心 Registry 不假定单一全局锁，也不要求 Claim 操作或游标不可用。可复用断言模块只导入公共记忆 Port、领域值与共享契约；应用编排由其他测试单独验证。`IN_MEMORY_CAPABILITY_CONTRACTS` 单独描述当前内存 Adapter 的能力边界：Claim 不可用、拒绝游标，以及任务在其进程全局锁上排队时的取消行为。其他 Adapter 只有在相同能力与同步模型适用时才绑定对应的能力 Profile。
+PostgreSQL Episode Adapter 已通过其类型化 Harness 绑定 `tests/contract/memory_adapter_contract.py` 中 `EPISODE_ADAPTER_CONTRACTS` 的每个断言，且未修改可复用断言主体。核心 Registry 不假定单一全局锁，也不要求 Claim 操作或游标不可用。可复用断言模块只导入公共记忆 Port、领域值与共享契约；应用编排由其他测试单独验证。`IN_MEMORY_CAPABILITY_CONTRACTS` 与 `POSTGRES_EPISODE_CAPABILITY_CONTRACTS` 分别描述各 Adapter 的不可用 Claim、拒绝游标与同步模型。
 
-PostgreSQL Adapter 还必须补充 PostgreSQL 专属的迁移、约束、事务隔离、租户强制与失败行为集成测试。新增共享能力行为需要单独评审的契约 Profile，而不是修改可移植 Episode 断言主体。
+生产 PostgreSQL 的后续工作包括行级安全（RLS）策略、通过显式组合根接入 `PostgresSettings`，以及 Episode 摄取之外的更广泛记忆表面。新增共享能力行为需要单独评审的契约 Profile，而不是修改可移植 Episode 断言主体。
 
-经过单独设计评审后，后续阶段可以增加显式组合根、PostgreSQL 或 Temporal Adapter、迁移、API、Worker 与外部事件分发。它们必须保留上述依赖与权威边界；本指南不预先授权任何供应商或可部署产品功能。
+经过单独设计评审后，后续阶段可增加 Temporal Adapter、API、Worker 与外部事件分发。它们必须保留上述依赖与权威边界；本指南不预先授权任何供应商或可部署产品功能。

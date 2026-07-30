@@ -18,6 +18,12 @@ Semantic Versioning after its first public release.
   event publication.
 - Transactional in-memory memory adapter with reusable
   `EPISODE_ADAPTER_CONTRACTS` and capability-profile contract coverage.
+- PostgreSQL Episode adapter: versioned SQL migrations, psycopg3 async pool,
+  transactional `PostgresMemoryUnitOfWork`, portable `EPISODE_ADAPTER_CONTRACTS`
+  binding, `POSTGRES_EPISODE_CAPABILITY_CONTRACTS`, integration coverage for
+  tenant isolation and transaction failures, and CI workflow against PostgreSQL
+  16. Import from `engrammesh.modules.memory.adapters.postgres`; the top-level
+  `adapters` package exports only the in-memory adapter.
 - Bilingual services architecture and Episode ingest guides (`services/README.md`,
   `services/README.zh-CN.md`).
 
