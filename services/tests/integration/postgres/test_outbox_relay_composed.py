@@ -102,7 +102,7 @@ async def test_composed_runtime_records_and_relays_episode_event(
     command = make_command()
 
     async with create_runtime(settings) as runtime:
-        publisher = runtime.outbox_event_publisher
+        publisher = runtime.logging_outbox_event_publisher
         await runtime.record_episode_handler().handle(command)
         result = await runtime.relay_outbox_once()
         published_events = publisher.published
@@ -134,7 +134,7 @@ async def test_replay_ingest_then_relay_publishes_nothing(
         handler = runtime.record_episode_handler()
         await handler.handle(command)
         first_relay = await runtime.relay_outbox_once()
-        publisher = runtime.outbox_event_publisher
+        publisher = runtime.logging_outbox_event_publisher
         publisher_length = len(publisher.published)
 
         await handler.handle(

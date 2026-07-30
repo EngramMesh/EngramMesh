@@ -34,6 +34,8 @@ from engrammesh.modules.memory.ports import (
     ClockPort,
     EntityResolverPort,
     EpisodeStore,
+    InboxEventProcessor,
+    InboxStore,
     MemoryAuthorizationPort,
     MemoryExtractorPort,
     MemoryIdentityPort,
@@ -70,6 +72,8 @@ PROTOCOLS = (
     OutboxPort,
     OutboxRelayStore,
     OutboxEventPublisher,
+    InboxStore,
+    InboxEventProcessor,
     MemoryUnitOfWorkFactory,
 )
 
@@ -87,6 +91,8 @@ EXPECTED_METHODS = {
     OutboxPort: ("publish",),
     OutboxRelayStore: ("fetch_unpublished", "mark_published", "count_unpublished"),
     OutboxEventPublisher: ("publish",),
+    InboxStore: ("try_record", "remove_record"),
+    InboxEventProcessor: ("supports", "process"),
     MemoryUnitOfWorkFactory: ("create",),
 }
 
@@ -330,6 +336,29 @@ PROTOCOL_SIGNATURES = {
         (("self", EMPTY, EMPTY), ("event", EventEnvelope, EMPTY)),
         None,
     ),
+    InboxStore.try_record: (
+        (
+            ("self", EMPTY, EMPTY),
+            ("event_id", EventId, EMPTY),
+            ("consumer_name", str, EMPTY),
+            ("event_type", str, EMPTY),
+            ("tenant_id", TenantId, EMPTY),
+            ("processed_at", datetime, EMPTY),
+        ),
+        bool,
+    ),
+    InboxStore.remove_record: (
+        (("self", EMPTY, EMPTY), ("event_id", EventId, EMPTY)),
+        None,
+    ),
+    InboxEventProcessor.supports: (
+        (("self", EMPTY, EMPTY), ("event_type", str, EMPTY)),
+        bool,
+    ),
+    InboxEventProcessor.process: (
+        (("self", EMPTY, EMPTY), ("event", EventEnvelope, EMPTY)),
+        None,
+    ),
     MemoryUnitOfWorkFactory.create: (
         (("self", EMPTY, EMPTY),),
         MemoryUnitOfWork,
@@ -343,13 +372,19 @@ def test_ports_are_runtime_checkable_protocols(protocol: type[object]) -> None:
     assert protocol._is_runtime_protocol  # type: ignore[attr-defined]
 
 
+_SYNC_PORT_METHODS = {
+    (MemoryUnitOfWorkFactory, "create"),
+    (InboxEventProcessor, "supports"),
+}
+
+
 @pytest.mark.parametrize(
     ("protocol", "method_name"),
     [
         (protocol, method_name)
         for protocol, method_names in EXPECTED_METHODS.items()
-        if protocol is not MemoryUnitOfWorkFactory
         for method_name in method_names
+        if (protocol, method_name) not in _SYNC_PORT_METHODS
     ],
 )
 def test_all_port_methods_are_coroutine_functions(
@@ -361,6 +396,10 @@ def test_all_port_methods_are_coroutine_functions(
 
 def test_unit_of_work_factory_create_is_synchronous() -> None:
     assert not inspect.iscoroutinefunction(MemoryUnitOfWorkFactory.create)
+
+
+def test_inbox_event_processor_supports_is_synchronous() -> None:
+    assert not inspect.iscoroutinefunction(InboxEventProcessor.supports)
 
 
 @pytest.mark.parametrize(
@@ -421,6 +460,8 @@ def test_protocol_methods_have_exact_signatures(
             KEYWORD_ONLY if name != "self" and method in (
                 OutboxRelayStore.fetch_unpublished,
                 OutboxRelayStore.mark_published,
+                InboxStore.try_record,
+                InboxStore.remove_record,
             )
             else PARAMETER,
         )

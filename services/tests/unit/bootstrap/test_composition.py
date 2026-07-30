@@ -9,6 +9,7 @@ from engrammesh.bootstrap.composition import (
     create_runtime,
     load_settings,
 )
+from engrammesh.bootstrap.infrastructure import InboxOutboxEventPublisher
 from engrammesh.bootstrap.settings import (
     AppSettings,
     ConfigurationError,
@@ -166,6 +167,46 @@ async def test_relay_outbox_handler_before_startup_raises() -> None:
 
 
 @pytest.mark.asyncio
+async def test_outbox_event_publisher_is_inbox_wrapper_when_inbox_enabled() -> None:
+    runtime = create_runtime(_test_settings())
+    with patch(
+        "engrammesh.bootstrap.composition.PostgresMemoryDatabase"
+    ) as database_cls:
+        database_cls.return_value.open = AsyncMock()
+        database_cls.return_value.close = AsyncMock()
+        await runtime.startup()
+        assert isinstance(runtime.outbox_event_publisher, InboxOutboxEventPublisher)
+
+
+@pytest.mark.asyncio
+async def test_outbox_event_publisher_is_logging_when_inbox_disabled() -> None:
+    runtime = create_runtime(_test_settings(inbox={"enabled": False}))
+    with patch(
+        "engrammesh.bootstrap.composition.PostgresMemoryDatabase"
+    ) as database_cls:
+        database_cls.return_value.open = AsyncMock()
+        database_cls.return_value.close = AsyncMock()
+        await runtime.startup()
+        assert runtime.outbox_event_publisher is runtime.logging_outbox_event_publisher
+
+
+def test_process_inbox_handler_when_memory_disabled_raises() -> None:
+    runtime = create_runtime(
+        _test_settings(modules=ModuleSettings(memory_enabled=False))
+    )
+    with pytest.raises(ConfigurationError) as exc_info:
+        runtime.process_inbox_handler()
+    assert exc_info.value.code == "memory_disabled"
+
+
+@pytest.mark.asyncio
+async def test_process_inbox_handler_before_startup_raises() -> None:
+    runtime = create_runtime(_test_settings())
+    with pytest.raises(RuntimeError, match="application runtime is not started"):
+        runtime.process_inbox_handler()
+
+
+@pytest.mark.asyncio
 async def test_relay_outbox_handler_returns_cached_handler() -> None:
     runtime = create_runtime(_test_settings())
     with patch(
@@ -193,8 +234,14 @@ async def test_shutdown_clears_outbox_publisher() -> None:
         database_cls.return_value.close = AsyncMock()
         await runtime.startup()
         publisher = runtime.outbox_event_publisher
+        logging_publisher = runtime.logging_outbox_event_publisher
+        inbox_handler = runtime.process_inbox_handler()
         await runtime.shutdown()
         assert runtime.outbox_event_publisher is not publisher
+        assert runtime.logging_outbox_event_publisher is not logging_publisher
+        with pytest.raises(RuntimeError, match="application runtime is not started"):
+            runtime.process_inbox_handler()
+        del inbox_handler
 
 
 @pytest.mark.asyncio

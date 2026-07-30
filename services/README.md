@@ -311,7 +311,8 @@ v1 assumes **one active relay worker per database** (no `SKIP LOCKED`). Rows
 are fetched in global order `occurred_at ASC, event_id ASC`. Delivery is
 **at-least-once**: if the process crashes after successful `publish` calls but
 before `mark_published`, a retry may dispatch the same event again; downstream
-consumers must dedupe by `event_id` (future Inbox slice). When any `publish`
+consumers must dedupe by `event_id` (see [Inbox Consumer](#inbox-consumer)).
+When any `publish`
 fails, the handler re-raises immediately and does not call `mark_published`;
 callers do not receive a `RelayOutboxResult` on failure. Events successfully
 dispatched before the failure may have been delivered but remain unmarked
@@ -321,7 +322,7 @@ dispatched before the failure may have been delivered but remain unmarked
 async with create_runtime(load_settings()) as runtime:
     await runtime.record_episode_handler().handle(command)
     result = await runtime.relay_outbox_once()
-    print(result.published, runtime.outbox_event_publisher.published)
+    print(result.published, runtime.logging_outbox_event_publisher.published)
 ```
 
 `relay_outbox_handler()` raises `ConfigurationError` with code `memory_disabled`
@@ -330,6 +331,81 @@ when memory is disabled (checked before relay-specific errors), then
 `RuntimeError` when the runtime is not started. The default
 `LoggingOutboxEventPublisher` records dispatched events in-process for tests;
 production brokers implement the same port without changing the handler.
+
+## Inbox Consumer
+
+When `inbox.enabled` is `True` (default), relay dispatch flows through
+`InboxOutboxEventPublisher`, which runs inbox processing before the logging
+delegate. `ProcessInboxEventHandler` routes supported events to pluggable
+processors; v1 registers `EpisodeRecordedProcessor` for
+`memory.episode-recorded` structural validation (no projection side effects).
+
+```text
+RelayOutboxEventsHandler
+  → InboxOutboxEventPublisher.publish(event)
+      → ProcessInboxEventHandler.handle(event)
+          → select InboxEventProcessor by event_type
+          → InboxStore.try_record(event_id, ...)
+          → EpisodeRecordedProcessor.process(event)
+          → on failure: InboxStore.remove_record(event_id)
+      → LoggingOutboxEventPublisher.publish(event)   # test visibility only
+  → OutboxRelayStore.mark_published(...)
+```
+
+**Delegate vs inbox authority:** `InboxOutboxEventPublisher` always calls the
+logging delegate after inbox handling, including when the handler returns
+`skipped=True` (duplicate or unsupported event). Use
+`logging_outbox_event_publisher.published` to assert dispatch visibility in
+tests; use `memory_inbox_events` row counts as the processed authority.
+`LoggingOutboxEventPublisher.published` is **not** a dedup authority.
+
+| Outcome | `processed` | `skipped` | Inbox row |
+|---------|-------------|-----------|-----------|
+| Unsupported `event_type` | `False` | `True` | not written |
+| Duplicate `event_id` | `False` | `True` | unchanged |
+| New successful processing | `True` | `False` | written |
+
+Processor failure after `try_record` calls `remove_record` and re-raises so
+relay does not `mark_published` and can retry. Unsupported event types skip
+without an inbox write.
+
+Migration `003_inbox_events.sql` creates `memory_inbox_events` with
+`event_id uuid PRIMARY KEY`. **v1 dedup key is `event_id` only** (global per
+database, single consumer). `consumer_name` is stored for audit and future
+multi-consumer migrations but does not participate in the primary key; multiple
+consumers processing the same `event_id` would require a composite key migration.
+
+### Configuration
+
+```python
+class InboxSettings:
+    enabled: bool = True
+    consumer_name: str = "episode-recorded-v1"
+```
+
+| Environment variable | Default |
+|---------------------|---------|
+| `ENGRAMMESH__INBOX__ENABLED` | `true` |
+| `ENGRAMMESH__INBOX__CONSUMER_NAME` | `episode-recorded-v1` |
+
+When `inbox.enabled=False`, `AppRuntime` uses `LoggingOutboxEventPublisher`
+only and behavior matches the pre-inbox relay path (no inbox DB writes). This
+is the rollback switch for regressions or environments that have not yet applied
+migration `003`.
+
+```python
+async with create_runtime(load_settings()) as runtime:
+    await runtime.record_episode_handler().handle(command)
+    await runtime.relay_outbox_once()
+    # Dispatch visibility (may include redeliveries):
+    runtime.logging_outbox_event_publisher.published
+    # Processed authority — query memory_inbox_events
+```
+
+`outbox_event_publisher` returns the wired publisher (`InboxOutboxEventPublisher`
+or `LoggingOutboxEventPublisher`). `logging_outbox_event_publisher` always
+exposes the inner delegate. `process_inbox_handler()` builds the handler when
+inbox processing is needed.
 
 ### Environment-gated authorization
 

@@ -75,3 +75,11 @@ class RelayOutboxResult:
     dispatched: int
     published: int
     remaining_unpublished: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessInboxEventResult:
+    """Outcome of consuming one relay-dispatched inbox event."""
+
+    processed: bool
+    skipped: bool

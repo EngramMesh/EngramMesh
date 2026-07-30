@@ -8,12 +8,14 @@ from typing import Self, final
 
 from engrammesh.bootstrap.infrastructure import (
     EnvironmentGatedMemoryAuthorization,
+    InboxOutboxEventPublisher,
     LoggingOutboxEventPublisher,
     SystemUtcClock,
     UuidMemoryIdentityPort,
 )
 from engrammesh.bootstrap.settings import AppSettings, ConfigurationError
 from engrammesh.modules.memory.adapters.postgres import (
+    PostgresInboxStore,
     PostgresMemoryDatabase,
     PostgresMemoryUnitOfWorkFactory,
     PostgresOutboxRelayStore,
@@ -22,8 +24,15 @@ from engrammesh.modules.memory.application.contracts import (
     RelayOutboxCommand,
     RelayOutboxResult,
 )
+from engrammesh.modules.memory.application.episode_recorded_processor import (
+    EpisodeRecordedProcessor,
+)
+from engrammesh.modules.memory.application.process_inbox_event import (
+    ProcessInboxEventHandler,
+)
 from engrammesh.modules.memory.application.record_episode import RecordEpisodeHandler
 from engrammesh.modules.memory.application.relay_outbox import RelayOutboxEventsHandler
+from engrammesh.modules.memory.ports import OutboxEventPublisher
 
 
 def load_settings() -> AppSettings:
@@ -48,6 +57,8 @@ class AppRuntime:
     __slots__ = (
         "_database",
         "_handler",
+        "_inbox_handler",
+        "_logging_publisher",
         "_outbox_publisher",
         "_relay_handler",
         "_settings",
@@ -60,7 +71,9 @@ class AppRuntime:
         self._database: PostgresMemoryDatabase | None = None
         self._unit_of_work_factory: PostgresMemoryUnitOfWorkFactory | None = None
         self._handler: RecordEpisodeHandler | None = None
-        self._outbox_publisher = LoggingOutboxEventPublisher()
+        self._inbox_handler: ProcessInboxEventHandler | None = None
+        self._logging_publisher = LoggingOutboxEventPublisher()
+        self._outbox_publisher: OutboxEventPublisher = self._logging_publisher
         self._relay_handler: RelayOutboxEventsHandler | None = None
         self._started = False
 
@@ -91,21 +104,51 @@ class AppRuntime:
         self._database = database
         self._unit_of_work_factory = PostgresMemoryUnitOfWorkFactory(database)
         self._started = True
+        self._logging_publisher = LoggingOutboxEventPublisher()
+        if self._settings.inbox.enabled:
+            self._outbox_publisher = InboxOutboxEventPublisher(
+                inbox_handler=self.process_inbox_handler(),
+                delegate=self._logging_publisher,
+            )
+        else:
+            self._outbox_publisher = self._logging_publisher
 
     async def shutdown(self) -> None:
         database = self._database
         self._database = None
         self._unit_of_work_factory = None
         self._handler = None
+        self._inbox_handler = None
         self._relay_handler = None
+        self._logging_publisher = LoggingOutboxEventPublisher()
         self._outbox_publisher = LoggingOutboxEventPublisher()
         self._started = False
         if database is not None:
             await database.close()
 
     @property
-    def outbox_event_publisher(self) -> LoggingOutboxEventPublisher:
+    def outbox_event_publisher(self) -> OutboxEventPublisher:
         return self._outbox_publisher
+
+    @property
+    def logging_outbox_event_publisher(self) -> LoggingOutboxEventPublisher:
+        return self._logging_publisher
+
+    def process_inbox_handler(self) -> ProcessInboxEventHandler:
+        if not self._settings.modules.memory_enabled:
+            msg = "memory module is disabled"
+            raise ConfigurationError("memory_disabled", msg)
+        if not self._started or self._database is None:
+            msg = "application runtime is not started"
+            raise RuntimeError(msg)
+        if self._inbox_handler is None:
+            self._inbox_handler = ProcessInboxEventHandler(
+                store=PostgresInboxStore(self._database),
+                processors=(EpisodeRecordedProcessor(),),
+                consumer_name=self._settings.inbox.consumer_name,
+                clock=SystemUtcClock(),
+            )
+        return self._inbox_handler
 
     def record_episode_handler(self) -> RecordEpisodeHandler:
         if not self._settings.modules.memory_enabled:
@@ -139,7 +182,7 @@ class AppRuntime:
             self._relay_handler = RelayOutboxEventsHandler(
                 clock=SystemUtcClock(),
                 store=PostgresOutboxRelayStore(self._database),
-                publisher=self._outbox_publisher,
+                publisher=self.outbox_event_publisher,
             )
         return self._relay_handler
 
