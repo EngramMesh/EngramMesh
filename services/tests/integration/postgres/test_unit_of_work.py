@@ -1,4 +1,4 @@
-"""Integration tests for the PostgreSQL memory unit of work."""
+"""Focused Task 3 integration tests for the PostgreSQL memory unit of work."""
 
 from __future__ import annotations
 
@@ -10,10 +10,17 @@ import psycopg
 import pytest
 import pytest_asyncio
 from contract.memory_adapter_contract import (
-    EPISODE_ADAPTER_CONTRACTS,
-    MemoryAdapterContractAssertion,
-    assert_claim_operations_are_unavailable,
-    assert_non_none_cursor_is_rejected,
+    TENANT_B,
+    MemoryAdapterHarnessFactory,
+    assert_cancellation_after_commit_remains_and_releases_lock,
+    assert_cancellation_inside_transaction_rolls_back_and_releases_lock,
+    assert_commit_persists_episode_and_outbox_atomically,
+    assert_divergent_idempotency_conflicts,
+    assert_exact_idempotent_replay,
+    assert_exit_without_commit_rolls_back,
+    assert_first_append_get_and_stream,
+    make_episode,
+    make_event,
     make_scope,
 )
 from psycopg.rows import dict_row
@@ -40,36 +47,6 @@ from engrammesh.shared.kernel.ids import MemoryId
 pytestmark = pytest.mark.postgres
 
 
-class PostgresMemoryAdapterHarness:
-    """Expose construction and committed-state probes for contract assertions."""
-
-    def __init__(self, database: PostgresMemoryDatabase, dsn: str) -> None:
-        self._database = database
-        self._dsn = dsn
-        self._unit_of_work_factory = PostgresMemoryUnitOfWorkFactory(database)
-
-    @property
-    def unit_of_work_factory(self) -> MemoryUnitOfWorkFactory:
-        return self._unit_of_work_factory
-
-    @property
-    def committed_episodes(self) -> tuple[Episode, ...]:
-        return _load_committed_episodes(self._dsn)
-
-    @property
-    def committed_events(self) -> tuple[EventEnvelope, ...]:
-        return _load_committed_events(self._dsn)
-
-
-POSTGRES_EPISODE_CAPABILITY_CONTRACTS: tuple[
-    tuple[str, MemoryAdapterContractAssertion],
-    ...,
-] = (
-    ("claims_unavailable", assert_claim_operations_are_unavailable),
-    ("cursor_rejection", assert_non_none_cursor_is_rejected),
-)
-
-
 @pytest_asyncio.fixture
 async def postgres_database(
     postgres_dsn: str,
@@ -85,14 +62,34 @@ async def postgres_database(
 
 
 @pytest.fixture
-def postgres_harness_factory(
+def harness_factory(
     postgres_database: PostgresMemoryDatabase,
     postgres_dsn: str,
-) -> Iterator[PostgresMemoryAdapterHarness]:
-    def make_harness() -> PostgresMemoryAdapterHarness:
-        return PostgresMemoryAdapterHarness(postgres_database, postgres_dsn)
+) -> Iterator[MemoryAdapterHarnessFactory]:
+    def make_harness() -> _Harness:
+        return _Harness(postgres_database, postgres_dsn)
 
     yield make_harness
+
+
+class _Harness:
+    """Minimal committed-state probe for focused contract assertions."""
+
+    def __init__(self, database: PostgresMemoryDatabase, dsn: str) -> None:
+        self._database = database
+        self._dsn = dsn
+
+    @property
+    def unit_of_work_factory(self) -> MemoryUnitOfWorkFactory:
+        return PostgresMemoryUnitOfWorkFactory(self._database)
+
+    @property
+    def committed_episodes(self) -> tuple[Episode, ...]:
+        return _load_committed_episodes(self._dsn)
+
+    @property
+    def committed_events(self) -> tuple[EventEnvelope, ...]:
+        return _load_committed_events(self._dsn)
 
 
 def _load_committed_episodes(dsn: str) -> tuple[Episode, ...]:
@@ -161,40 +158,119 @@ def _normalize_loaded_event(event: EventEnvelope) -> EventEnvelope:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("case_name", "assert_contract"),
-    EPISODE_ADAPTER_CONTRACTS,
-    ids=[case_name for case_name, _ in EPISODE_ADAPTER_CONTRACTS],
-)
-async def test_postgres_episode_adapter_contract(
-    case_name: str,
-    assert_contract: MemoryAdapterContractAssertion,
-    postgres_harness_factory: Iterator[PostgresMemoryAdapterHarness],
+async def test_first_append_get_and_stream(
+    harness_factory: MemoryAdapterHarnessFactory,
 ) -> None:
-    del case_name
-    await assert_contract(postgres_harness_factory)
+    await assert_first_append_get_and_stream(harness_factory)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("case_name", "assert_contract"),
-    POSTGRES_EPISODE_CAPABILITY_CONTRACTS,
-    ids=[case_name for case_name, _ in POSTGRES_EPISODE_CAPABILITY_CONTRACTS],
-)
-async def test_postgres_episode_capability_contract(
-    case_name: str,
-    assert_contract: MemoryAdapterContractAssertion,
-    postgres_harness_factory: Iterator[PostgresMemoryAdapterHarness],
+async def test_exact_idempotent_replay(
+    harness_factory: MemoryAdapterHarnessFactory,
 ) -> None:
-    del case_name
-    await assert_contract(postgres_harness_factory)
+    await assert_exact_idempotent_replay(harness_factory)
+
+
+@pytest.mark.asyncio
+async def test_divergent_idempotency_conflicts(
+    harness_factory: MemoryAdapterHarnessFactory,
+) -> None:
+    await assert_divergent_idempotency_conflicts(harness_factory)
+
+
+@pytest.mark.asyncio
+async def test_exit_without_commit_rolls_back(
+    harness_factory: MemoryAdapterHarnessFactory,
+) -> None:
+    await assert_exit_without_commit_rolls_back(harness_factory)
+
+
+@pytest.mark.asyncio
+async def test_episode_recorded_outbox_integrity(
+    harness_factory: MemoryAdapterHarnessFactory,
+) -> None:
+    harness = harness_factory()
+    committed = make_episode(1)
+    unknown = make_episode(99)
+
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        await unit_of_work.episodes.append(committed)
+        await unit_of_work.commit()
+
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        with pytest.raises(
+            ValueError,
+            match="outbox episode event aggregate is unknown",
+        ):
+            await unit_of_work.outbox.publish(make_event(4, episode=unknown))
+        with pytest.raises(
+            ValueError,
+            match="outbox event tenant does not match episode tenant",
+        ):
+            await unit_of_work.outbox.publish(
+                replace(
+                    make_event(5, episode=committed),
+                    tenant_id=TENANT_B,
+                )
+            )
+
+    assert harness.committed_episodes == (committed,)
+    assert harness.committed_events == ()
+
+
+@pytest.mark.asyncio
+async def test_non_episode_event_types_publish_without_validation(
+    harness_factory: MemoryAdapterHarnessFactory,
+) -> None:
+    harness = harness_factory()
+    staged = make_episode(2)
+    other_event = make_event(
+        3,
+        episode=make_episode(99),
+        event_type="memory.projection-requested",
+    )
+
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        await unit_of_work.episodes.append(staged)
+        await unit_of_work.outbox.publish(other_event)
+        await unit_of_work.commit()
+
+    assert harness.committed_episodes == (staged,)
+    assert harness.committed_events == (other_event,)
+
+
+@pytest.mark.asyncio
+async def test_commit_persists_episode_and_outbox_atomically(
+    harness_factory: MemoryAdapterHarnessFactory,
+) -> None:
+    await assert_commit_persists_episode_and_outbox_atomically(
+        harness_factory
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancellation_inside_transaction_rolls_back_and_releases_lock(
+    harness_factory: MemoryAdapterHarnessFactory,
+) -> None:
+    await assert_cancellation_inside_transaction_rolls_back_and_releases_lock(
+        harness_factory
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancellation_after_commit_remains_and_releases_lock(
+    harness_factory: MemoryAdapterHarnessFactory,
+) -> None:
+    await assert_cancellation_after_commit_remains_and_releases_lock(
+        harness_factory
+    )
 
 
 @pytest.mark.asyncio
 async def test_cursor_rejection_matches_in_memory_message(
-    postgres_harness_factory: Iterator[PostgresMemoryAdapterHarness],
+    harness_factory: MemoryAdapterHarnessFactory,
 ) -> None:
-    harness = postgres_harness_factory()
+    harness = harness_factory()
 
     async with harness.unit_of_work_factory.create() as unit_of_work:
         with pytest.raises(
@@ -206,9 +282,9 @@ async def test_cursor_rejection_matches_in_memory_message(
 
 @pytest.mark.asyncio
 async def test_claims_unavailable_matches_in_memory_message(
-    postgres_harness_factory: Iterator[PostgresMemoryAdapterHarness],
+    harness_factory: MemoryAdapterHarnessFactory,
 ) -> None:
-    harness = postgres_harness_factory()
+    harness = harness_factory()
 
     async with harness.unit_of_work_factory.create() as unit_of_work:
         with pytest.raises(
