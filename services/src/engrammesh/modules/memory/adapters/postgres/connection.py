@@ -36,20 +36,23 @@ class PostgresMemoryDatabase:
 
     async def close(self) -> None:
         """Close the connection pool."""
-        if self._pool is None:
-            return
-        await self._pool.close()
-        self._pool = None
-        self._migrations_applied = False
+        async with self._migration_lock:
+            pool = self._pool
+            if pool is None:
+                return
+            self._pool = None
+            self._migrations_applied = False
+        await pool.close()
 
     @asynccontextmanager
     async def connection(self) -> AsyncIterator[AsyncConnection]:
         """Borrow a pooled connection with migrations applied once."""
-        pool = self._pool
-        if pool is None:
-            msg = "postgres memory database is not open"
-            raise RuntimeError(msg)
         await self._ensure_migrations()
+        async with self._migration_lock:
+            pool = self._pool
+            if pool is None:
+                msg = "postgres memory database is not open"
+                raise RuntimeError(msg)
         async with pool.connection() as connection:
             yield connection
 
