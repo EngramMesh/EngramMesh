@@ -35,6 +35,13 @@ Semantic Versioning after its first public release.
   migration, `AppRuntime.relay_outbox_once` / `run_outbox_relay_loop`, composed
   relay integration coverage, and bilingual services documentation for relay
   semantics (`OutboxPort` vs `OutboxEventPublisher`, at-least-once delivery).
+- Episode ingest HTTP API: FastAPI control API (`bootstrap/http/`,
+  `bootstrap/server.py`) with `POST /v1/tenants/{tenant_id}/episodes`,
+  `GET /health`, `GET /ready`, structured error envelopes (403 / 409 / 422 /
+  503 / 500), stable `/ready` reason codes, `record-episode-request.schema.json`,
+  HTTP scope vs Outbox event scope separation, unit and integration tests, and
+  bilingual services documentation (endpoints, errors, staging/production write
+  restriction, `curl` example, server start command).
 
 ### Changed
 
