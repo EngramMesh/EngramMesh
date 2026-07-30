@@ -6,9 +6,11 @@
 
 ## Status
 
-The tested architecture scaffold has started; no runtime adapter or product
-feature is implemented. See the [English services architecture-code
-guide](services/README.md).
+The tested Python architecture scaffold and Episode ingest application slice are
+in place, including an in-memory transactional memory adapter and reusable
+adapter contract suite. Production PostgreSQL, Temporal, API, worker, and
+product features are not implemented yet. See the [English services
+architecture-code guide](services/README.md).
 
 ## Why EngramMesh
 

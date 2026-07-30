@@ -6,7 +6,7 @@
 
 ## 状态
 
-经过测试的架构脚手架已经启动；尚未实现任何运行时 Adapter 或产品功能。参阅[中文服务架构代码指南](services/README.zh-CN.md)。
+经过测试的 Python 架构脚手架与 Episode 摄取应用切片已落地，包含事务型内存 Adapter 与可复用的 Adapter 契约测试套件。生产级 PostgreSQL、Temporal、API、Worker 与产品功能尚未实现。参阅[中文服务架构代码指南](services/README.zh-CN.md)。
 
 ## 为什么选择 EngramMesh
 
