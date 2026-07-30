@@ -1,9 +1,14 @@
 import asyncio
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from engrammesh.bootstrap.composition import create_runtime, load_settings
+from engrammesh.bootstrap.composition import (
+    ReadinessError,
+    create_runtime,
+    load_settings,
+)
 from engrammesh.bootstrap.settings import (
     AppSettings,
     ConfigurationError,
@@ -214,3 +219,64 @@ async def test_run_outbox_relay_loop_exits_immediately_when_stopped() -> None:
                 stop_event=stop_event,
             )
             relay_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_check_ready_raises_runtime_not_started() -> None:
+    runtime = create_runtime(_test_settings())
+    with pytest.raises(ReadinessError) as exc:
+        await runtime.check_ready()
+    assert exc.value.code == "runtime_not_started"
+
+
+@pytest.mark.asyncio
+async def test_check_ready_raises_memory_disabled() -> None:
+    runtime = create_runtime(
+        _test_settings(modules=ModuleSettings(memory_enabled=False))
+    )
+    with pytest.raises(ReadinessError) as exc:
+        await runtime.check_ready()
+    assert exc.value.code == "memory_disabled"
+
+
+@pytest.mark.asyncio
+async def test_check_ready_raises_database_unavailable() -> None:
+    runtime = create_runtime(_test_settings())
+    with patch(
+        "engrammesh.bootstrap.composition.PostgresMemoryDatabase"
+    ) as database_cls:
+        database = database_cls.return_value
+        database.open = AsyncMock()
+        database.close = AsyncMock()
+
+        @asynccontextmanager
+        async def failing_connection():
+            raise RuntimeError("database unavailable")
+            yield  # pragma: no cover
+
+        database.connection = failing_connection
+        await runtime.startup()
+        with pytest.raises(ReadinessError) as exc:
+            await runtime.check_ready()
+        assert exc.value.code == "database_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_check_ready_succeeds_when_database_is_available() -> None:
+    runtime = create_runtime(_test_settings())
+    with patch(
+        "engrammesh.bootstrap.composition.PostgresMemoryDatabase"
+    ) as database_cls:
+        database = database_cls.return_value
+        database.open = AsyncMock()
+        database.close = AsyncMock()
+
+        @asynccontextmanager
+        async def healthy_connection():
+            connection = AsyncMock()
+            connection.execute = AsyncMock()
+            yield connection
+
+        database.connection = healthy_connection
+        await runtime.startup()
+        await runtime.check_ready()

@@ -35,6 +35,15 @@ def create_runtime(settings: AppSettings | None = None) -> AppRuntime:
 
 
 @final
+class ReadinessError(Exception):
+    """Raised when AppRuntime is not ready to serve memory traffic."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+@final
 class AppRuntime:
     __slots__ = (
         "_database",
@@ -58,6 +67,17 @@ class AppRuntime:
     @property
     def settings(self) -> AppSettings:
         return self._settings
+
+    async def check_ready(self) -> None:
+        if not self._settings.modules.memory_enabled:
+            raise ReadinessError("memory_disabled")
+        if not self._started or self._database is None:
+            raise ReadinessError("runtime_not_started")
+        try:
+            async with self._database.connection() as conn:
+                await conn.execute("SELECT 1")
+        except Exception:  # noqa: BLE001 -- readiness must not leak database errors
+            raise ReadinessError("database_unavailable") from None
 
     async def startup(self) -> None:
         if not self._settings.modules.memory_enabled:
