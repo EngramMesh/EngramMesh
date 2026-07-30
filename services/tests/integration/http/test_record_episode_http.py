@@ -212,7 +212,7 @@ async def test_post_memory_disabled_returns_503() -> None:
     assert response.status_code == 503
     assert response.json() == error_envelope(
         "service_unavailable",
-        "memory module is disabled",
+        "service is unavailable",
         details=(
             {
                 "type": "configuration_error",

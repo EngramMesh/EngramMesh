@@ -157,7 +157,7 @@ async def test_configuration_error_maps_to_503(error_app: FastAPI) -> None:
     assert response.status_code == 503
     assert response.json() == error_envelope(
         "service_unavailable",
-        "memory module is disabled",
+        "service is unavailable",
         details=(
             {
                 "type": "configuration_error",
