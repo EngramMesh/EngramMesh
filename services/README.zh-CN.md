@@ -6,7 +6,7 @@
 
 本目录包含经过测试的 EngramMesh Python 3.14 服务架构脚手架，以及一个经过测试的 Episode 摄取应用切片。它定义了不可变的共享标识符与事件元数据、记忆模块和持久化运行时的公共契约、依赖规则、类型化进程配置、从设置装配 PostgreSQL Handler 的组合根、带版本的 JSON Schema 事件契约，以及仅用于测试与开发的事务型内存 Adapter。
 
-它**不**包含可运行的 HTTP 服务器、Worker 进程或外部事件分发器、依赖注入框架、生产 Temporal 客户端、API 表面、模型或工具集成、投影流水线或可部署产品功能。内存 Adapter 仅在单个进程内保存状态，并不持久化。测试通过只能证明本文所述应用契约与架构契约成立，并不表示已经存在可部署的运行时。
+它**不**包含 Worker 进程或外部事件分发器、依赖注入框架、生产 Temporal 客户端、模型或工具集成、投影流水线或可部署产品功能。最小 HTTP 控制 API 已暴露 Episode 摄取与健康探针；OIDC、读取 API 与生产加固仍属后续工作。内存 Adapter 仅在单个进程内保存状态，并不持久化。测试通过只能证明本文所述应用契约与架构契约成立，并不表示已经存在可部署的运行时。
 
 ## 模块树
 
@@ -15,7 +15,9 @@ services/
 ├── src/engrammesh/
 │   ├── bootstrap/
 │   │   ├── composition.py    # AppRuntime 组合根
+│   │   ├── http/             # FastAPI 控制 API（Episode 摄取、探针）
 │   │   ├── infrastructure.py # 默认时钟、标识符与授权 Port
+│   │   ├── server.py         # uvicorn 入口
 │   │   └── settings.py       # 类型化、不可变的配置边界
 │   ├── modules/
 │   │   ├── memory/
@@ -75,7 +77,7 @@ PostgreSQL 驱动、Temporal SDK、模型提供方、工具协议、对象存储
 
 `RecordEpisodeHandler` 是一个与框架无关的应用服务。它先完成授权，再使用注入的时钟与标识符 Port，按内容引用记录一个不可变 `Episode`。具体持久化实现包括 `InMemoryMemoryUnitOfWorkFactory`（进程内）和 `PostgresMemoryUnitOfWorkFactory`（持久化 PostgreSQL）。PostgreSQL 类型应从 `engrammesh.modules.memory.adapters.postgres` 导入，而非顶层 `engrammesh.modules.memory.adapters` 包（该包仅导出内存 Adapter）。
 
-本切片明确不包含 HTTP、依赖注入框架装配、Temporal、对象上传、Claim 提取、检索、纠正与删除、投影，以及外部 Outbox 分发。内存 Adapter 不提供跨进程持久性或投递保证。
+本切片明确不包含依赖注入框架装配、Temporal、对象上传、Claim 提取、检索、纠正与删除、投影，以及外部 Outbox 分发。HTTP 传输由 `bootstrap/http/` 单独提供；内存 Adapter 不提供跨进程持久性或投递保证。
 
 ## 应用流程
 
@@ -229,7 +231,122 @@ async with create_runtime(load_settings()) as runtime:
 | `staging`     | 所有请求返回 `False` |
 | `production`  | 所有请求返回 `False` |
 
-授权被拒绝时，`RecordEpisodeHandler` 会抛出 `EpisodeAuthorizationDenied`（现有应用行为）。
+授权被拒绝时，`RecordEpisodeHandler` 会抛出 `EpisodeAuthorizationDenied`（现有应用行为）。在 HTTP API 上，`staging` 与 `production` 对 `POST /v1/tenants/{tenant_id}/episodes` 因此返回 **403**，`error.code` 为 `episode_authorization_denied`；本地写入练习请使用 `development` 或 `test`。
+
+## Episode 摄取 HTTP API
+
+`bootstrap/http/` 暴露首个 Control API 切片：通过 REST 调用 `RecordEpisodeCommand`，经 `create_app(runtime, lifespan=lifespan)` 与 `AppRuntime.record_episode_handler()` 装配。FastAPI 与 uvicorn 仅出现在 bootstrap；领域与应用模块保持与框架无关。
+
+```python
+from engrammesh.bootstrap.http.app import create_app
+```
+
+### 端点
+
+| 方法 | 路径 | 成功状态码 | 说明 |
+|------|------|-----------|------|
+| `GET` | `/health` | `200` | 存活探针；不访问数据库 |
+| `GET` | `/ready` | `200` 或 `503` | 就绪探针；检查运行时启动、memory 启用与 PostgreSQL |
+| `POST` | `/v1/tenants/{tenant_id}/episodes` | `201` 或 `200` | 记录一条 Episode；新建为 `201`，精确幂等重放为 `200` |
+
+`POST` 接受可选请求头 `X-Correlation-Id`（UUID）。缺省时服务端生成新 correlation ID；非 UUID 格式返回 **422**。
+
+路径 `tenant_id` 必须与 body `scope.tenant_id` 一致；不一致返回 **422**。
+
+### HTTP scope 与事件 scope 差异
+
+HTTP 请求体使用独立传输 Schema（`record-episode-request.schema.json`），**不得**复用 Outbox 事件 payload Schema。
+
+| 层面 | tenant 位置 | `scope` 字段 |
+|------|------------|--------------|
+| HTTP 请求体 | `scope.tenant_id`（必填）+ path `tenant_id`（须一致） | `tenant_id`, `subject_id`, `workspace_id?`, `agent_id?` |
+| Outbox 事件 envelope | 信封层 `tenant_id` | — |
+| Outbox 事件 `payload.scope` | **不含** `tenant_id` | `subject_id`, `workspace_id?`, `agent_id?` |
+
+path/body 双写 `tenant_id` 用于网关路由、审计与请求校验。`RecordEpisodeHandler` 发布事件时，`payload.scope` 仍不包含 `tenant_id`。
+
+### 错误响应
+
+Episode 摄取错误使用统一信封：
+
+```json
+{
+  "error": {
+    "code": "<machine_readable_code>",
+    "message": "<human_readable_message>",
+    "details": []
+  }
+}
+```
+
+| 状态码 | `error.code` | 触发条件 |
+|--------|--------------|----------|
+| `403` | `episode_authorization_denied` | `EpisodeAuthorizationDenied`（含 `staging` / `production`） |
+| `409` | `episode_idempotency_conflict` | 相同 `(tenant_id, idempotency_key)` 但 Episode 定义字段不同 |
+| `422` | `validation_error` | Pydantic 校验失败、path/body `tenant_id` 不一致、非法 `X-Correlation-Id` |
+| `503` | `service_unavailable` | `ConfigurationError`（如 `memory_disabled`、`http_disabled`） |
+| `500` | `internal_error` | 未预期异常（响应不泄漏堆栈） |
+
+### `/ready` reason 码
+
+未就绪时 `GET /ready` 返回 **503**：
+
+```json
+{ "status": "not_ready", "reason": "<stable_code>" }
+```
+
+| `reason` | 条件 |
+|----------|------|
+| `runtime_not_started` | `AppRuntime.startup()` 尚未完成 |
+| `database_unavailable` | PostgreSQL 连接池不可用或 `SELECT 1` 失败 |
+| `memory_disabled` | `modules.memory_enabled` 为 `False` |
+
+Episode 路由上的 `ReadinessError` 使用相同的 `not_ready` 体（非 `error` 信封）。
+
+### 启动 HTTP 服务
+
+通过 `ENGRAMMESH__HTTP__HOST`、`ENGRAMMESH__HTTP__PORT`、`ENGRAMMESH__HTTP__ENABLED` 配置。授权写入请使用 `development` 或 `test`。
+
+```bash
+ENGRAMMESH__ENVIRONMENT=development \
+ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engrammesh \
+ENGRAMMESH__TEMPORAL__NAMESPACE=demo \
+ENGRAMMESH__TEMPORAL__TASK_QUEUE=demo \
+uv run --python 3.14 --project services \
+  python -m engrammesh.bootstrap.server
+```
+
+`server.py` 调用 `create_runtime`，定义 lifespan 的 `startup`/`shutdown`，并传入 `create_app`。HTTP 进程内不启动 Outbox relay；分发仍通过 `relay_outbox_once()` 或独立 Worker。
+
+### `curl` 示例
+
+```bash
+curl -sS -X POST "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/episodes" \
+  -H "Content-Type: application/json" \
+  -H "X-Correlation-Id: 02ffae84-2764-41f3-a22a-4d4652a7c139" \
+  -d '{
+    "actor_id": "3ba213e4-3367-4e7c-9635-bcbfbad505e6",
+    "scope": {
+      "tenant_id": "53dad495-7915-439a-b03a-379452a1aa86",
+      "subject_id": "3d65c071-ac55-4847-a8f1-e3cb859d3c45",
+      "workspace_id": "workspace-42"
+    },
+    "source_type": "user",
+    "content_ref": "a2e57fc9-d07d-45dc-a647-76d195985d86",
+    "observed_at": "2026-07-27T10:00:00+00:00",
+    "content_hash": "sha256:88c7355c",
+    "idempotency_key": "episode-42",
+    "sensitivity": "confidential",
+    "retention_class": "standard",
+    "consent_basis": "user_request"
+  }'
+```
+
+首次写入预期响应（`201`）：
+
+```json
+{ "episode_id": "<uuid>", "created": true }
+```
 
 ## 运行示例
 
@@ -360,6 +477,6 @@ ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engr
 
 PostgreSQL Episode Adapter 已通过其类型化 Harness 绑定 `tests/contract/memory_adapter_contract.py` 中 `EPISODE_ADAPTER_CONTRACTS` 的每个断言，且未修改可复用断言主体。核心 Registry 不假定单一全局锁，也不要求 Claim 操作或游标不可用。可复用断言模块只导入公共记忆 Port、领域值与共享契约；应用编排由其他测试单独验证。`IN_MEMORY_CAPABILITY_CONTRACTS` 与 `POSTGRES_EPISODE_CAPABILITY_CONTRACTS` 分别描述各 Adapter 的不可用 Claim、拒绝游标与同步模型。
 
-生产 PostgreSQL 的后续工作包括行级安全（RLS）策略，以及 Episode 摄取之外的更广泛记忆表面。下一个应用切片是为 `RecordEpisodeCommand` 提供 HTTP API。新增共享能力行为需要单独评审的契约 Profile，而不是修改可移植 Episode 断言主体。
+生产 PostgreSQL 的后续工作包括行级安全（RLS）策略，以及 Episode 摄取之外的更广泛记忆表面。HTTP 后续工作包括 OIDC、读取 API 与生产可观测性。新增共享能力行为需要单独评审的契约 Profile，而不是修改可移植 Episode 断言主体。
 
 经过单独设计评审后，后续阶段可增加 Temporal Adapter、API、Worker 与外部事件分发。它们必须保留上述依赖与权威边界；本指南不预先授权任何供应商或可部署产品功能。

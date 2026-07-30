@@ -12,10 +12,11 @@ composition root that wires PostgreSQL-backed handlers from settings, versioned
 JSON Schema event contracts, and a transactional in-memory adapter for test and
 development use.
 
-It does **not** contain a running HTTP server, worker process, or external event
-dispatcher, a dependency-injection framework, production Temporal client, API
-surface, model or tool integration, projection pipeline, or deployable product
-feature. The in-memory adapter is process-local and non-durable. Passing tests
+It does **not** contain a worker process or external event dispatcher, a
+dependency-injection framework, production Temporal client, model or tool
+integration, projection pipeline, or deployable product feature. A minimal HTTP
+control API exposes Episode ingest and health probes; OIDC, read APIs, and
+production hardening remain follow-up work. The in-memory adapter is process-local and non-durable. Passing tests
 prove the documented application and architecture contracts; they do not imply
 that a deployable runtime exists.
 
@@ -26,7 +27,9 @@ services/
 ├── src/engrammesh/
 │   ├── bootstrap/
 │   │   ├── composition.py    # AppRuntime composition root
+│   │   ├── http/             # FastAPI control API (episode ingest, probes)
 │   │   ├── infrastructure.py # default clock, identity, and authorization ports
+│   │   ├── server.py         # uvicorn entry point
 │   │   └── settings.py       # typed, immutable configuration boundary
 │   ├── modules/
 │   │   ├── memory/
@@ -115,10 +118,11 @@ Import PostgreSQL types from `engrammesh.modules.memory.adapters.postgres`,
 not from the top-level `engrammesh.modules.memory.adapters` package, which
 exports only the in-memory adapter.
 
-The slice deliberately excludes HTTP, dependency-injection framework wiring,
+The slice deliberately excludes dependency-injection framework wiring,
 Temporal, object upload, Claim extraction, retrieval, correction and deletion,
-projections, and external Outbox dispatch. The in-memory adapter makes no
-cross-process durability or delivery guarantee.
+projections, and external Outbox dispatch. HTTP transport is provided separately
+by `bootstrap/http/`; the in-memory adapter makes no cross-process durability or
+delivery guarantee.
 
 ## Application flow
 
@@ -341,7 +345,136 @@ the composed handler. Until the OIDC slice lands, authorization is gated by
 | `production`  | `False` for all requests |
 
 Denied authorization surfaces as `EpisodeAuthorizationDenied` from
-`RecordEpisodeHandler` (existing application behavior).
+`RecordEpisodeHandler` (existing application behavior). On the HTTP API,
+`staging` and `production` therefore return **403** with code
+`episode_authorization_denied` for `POST /v1/tenants/{tenant_id}/episodes`;
+use `development` or `test` for local write exercises.
+
+## Episode ingest HTTP API
+
+`bootstrap/http/` exposes the first Control API slice: `RecordEpisodeCommand`
+over REST, wired through `create_app(runtime, lifespan=lifespan)` and
+`AppRuntime.record_episode_handler()`. FastAPI and uvicorn stay in bootstrap;
+domain and application modules remain framework-neutral.
+
+```python
+from engrammesh.bootstrap.http.app import create_app
+```
+
+### Endpoints
+
+| Method | Path | Success | Description |
+|--------|------|---------|-------------|
+| `GET` | `/health` | `200` | Liveness probe; does not touch the database |
+| `GET` | `/ready` | `200` or `503` | Readiness probe; checks runtime startup, memory enablement, and PostgreSQL |
+| `POST` | `/v1/tenants/{tenant_id}/episodes` | `201` or `200` | Record one Episode; `201` when created, `200` on exact idempotent replay |
+
+`POST` accepts optional header `X-Correlation-Id` (UUID). When omitted, the
+server generates a new correlation ID. Non-UUID values return **422**.
+
+Path `tenant_id` must match body `scope.tenant_id`; a mismatch returns **422**.
+
+### HTTP scope vs event scope
+
+HTTP request bodies use an independent transport schema
+(`record-episode-request.schema.json`), not the Outbox event payload schema.
+
+| Layer | Tenant location | `scope` fields |
+|-------|---------------|----------------|
+| HTTP request body | `scope.tenant_id` (required) plus path `tenant_id` (must match) | `tenant_id`, `subject_id`, `workspace_id?`, `agent_id?` |
+| Outbox event envelope | `tenant_id` at envelope level | — |
+| Outbox event `payload.scope` | **not included** | `subject_id`, `workspace_id?`, `agent_id?` |
+
+The path/body `tenant_id` duplication supports gateway routing, audit logs, and
+request validation. `RecordEpisodeHandler` still publishes events without
+`tenant_id` inside `payload.scope`.
+
+### Error responses
+
+Episode ingest errors use a canonical envelope:
+
+```json
+{
+  "error": {
+    "code": "<machine_readable_code>",
+    "message": "<human_readable_message>",
+    "details": []
+  }
+}
+```
+
+| Status | `error.code` | Condition |
+|--------|--------------|-----------|
+| `403` | `episode_authorization_denied` | `EpisodeAuthorizationDenied` (including `staging` / `production`) |
+| `409` | `episode_idempotency_conflict` | Same `(tenant_id, idempotency_key)` with differing Episode-defining fields |
+| `422` | `validation_error` | Pydantic validation, path/body `tenant_id` mismatch, invalid `X-Correlation-Id` |
+| `503` | `service_unavailable` | `ConfigurationError` (for example `memory_disabled`, `http_disabled`) |
+| `500` | `internal_error` | Unhandled exception (no stack trace in the response) |
+
+### `/ready` reason codes
+
+When not ready, `GET /ready` returns **503**:
+
+```json
+{ "status": "not_ready", "reason": "<stable_code>" }
+```
+
+| `reason` | Condition |
+|----------|-----------|
+| `runtime_not_started` | `AppRuntime.startup()` has not completed |
+| `database_unavailable` | PostgreSQL pool unavailable or `SELECT 1` failed |
+| `memory_disabled` | `modules.memory_enabled` is `False` |
+
+`ReadinessError` on episode routes uses the same `not_ready` body (not the
+`error` envelope).
+
+### Start the HTTP server
+
+Configure via `ENGRAMMESH__HTTP__HOST`, `ENGRAMMESH__HTTP__PORT`, and
+`ENGRAMMESH__HTTP__ENABLED`. Use `development` or `test` for authorized writes.
+
+```bash
+ENGRAMMESH__ENVIRONMENT=development \
+ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engrammesh \
+ENGRAMMESH__TEMPORAL__NAMESPACE=demo \
+ENGRAMMESH__TEMPORAL__TASK_QUEUE=demo \
+uv run --python 3.14 --project services \
+  python -m engrammesh.bootstrap.server
+```
+
+`server.py` calls `create_runtime`, defines lifespan `startup`/`shutdown`, and
+passes that lifespan into `create_app`. Outbox relay is not started inside the
+HTTP process; dispatch remains via `relay_outbox_once()` or a separate worker.
+
+### Example `curl`
+
+```bash
+curl -sS -X POST "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/episodes" \
+  -H "Content-Type: application/json" \
+  -H "X-Correlation-Id: 02ffae84-2764-41f3-a22a-4d4652a7c139" \
+  -d '{
+    "actor_id": "3ba213e4-3367-4e7c-9635-bcbfbad505e6",
+    "scope": {
+      "tenant_id": "53dad495-7915-439a-b03a-379452a1aa86",
+      "subject_id": "3d65c071-ac55-4847-a8f1-e3cb859d3c45",
+      "workspace_id": "workspace-42"
+    },
+    "source_type": "user",
+    "content_ref": "a2e57fc9-d07d-45dc-a647-76d195985d86",
+    "observed_at": "2026-07-27T10:00:00+00:00",
+    "content_hash": "sha256:88c7355c",
+    "idempotency_key": "episode-42",
+    "sensitivity": "confidential",
+    "retention_class": "standard",
+    "consent_basis": "user_request"
+  }'
+```
+
+Expected first-write response (`201`):
+
+```json
+{ "episode_id": "<uuid>", "created": true }
+```
 
 ## Run the example
 
@@ -485,10 +618,10 @@ orchestration is tested separately. `IN_MEMORY_CAPABILITY_CONTRACTS` and
 unavailable Claims, rejected cursors, and synchronization model.
 
 Follow-up work for production PostgreSQL includes row-level security policies
-and broader memory surfaces beyond Episode ingest. The next application slice
-is an HTTP API for `RecordEpisodeCommand`. New shared capability behavior
-requires a separately reviewed contract profile rather than edits to the
-portable Episode assertion bodies.
+and broader memory surfaces beyond Episode ingest. HTTP follow-up includes OIDC,
+read APIs, and production observability. New shared capability behavior requires
+a separately reviewed contract profile rather than edits to the portable Episode
+assertion bodies.
 
 After separate design review, later phases may add Temporal adapters, APIs,
 workers, and external event dispatch. They must preserve the dependency and
