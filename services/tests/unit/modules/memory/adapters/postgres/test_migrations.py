@@ -16,6 +16,11 @@ def test_migrations_dir_contains_episode_outbox_sql() -> None:
     assert migration.is_file()
 
 
+def test_migrations_dir_contains_outbox_relay_index_sql() -> None:
+    migration = MIGRATIONS_DIR / "002_outbox_relay_index.sql"
+    assert migration.is_file()
+
+
 @pytest.mark.postgres
 def test_apply_migrations_records_applied_versions(
     postgres_connection: Connection,
@@ -29,7 +34,7 @@ def test_apply_migrations_records_applied_versions(
         )
     }
 
-    assert versions == {"001_episode_outbox"}
+    assert versions == {"001_episode_outbox", "002_outbox_relay_index"}
 
 
 @pytest.mark.postgres
@@ -41,4 +46,4 @@ def test_apply_migrations_is_idempotent(postgres_connection: Connection) -> None
         "SELECT COUNT(*) FROM memory_schema_migrations"
     ).fetchone()[0]
 
-    assert count == 1
+    assert count == 2
