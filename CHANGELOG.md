@@ -26,6 +26,10 @@ Semantic Versioning after its first public release.
   `adapters` package exports only the in-memory adapter.
 - Bilingual services architecture and Episode ingest guides (`services/README.md`,
   `services/README.zh-CN.md`).
+- Composition root (`bootstrap/composition.py`, `bootstrap/infrastructure.py`):
+  `load_settings`, `AppRuntime`, `create_runtime`, environment-gated authorization,
+  PostgreSQL wiring and pool lifecycle, and composed Episode ingest integration
+  coverage.
 
 ### Changed
 

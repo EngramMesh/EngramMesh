@@ -7,16 +7,17 @@
 This directory contains the tested Python 3.14 architecture scaffold for
 EngramMesh services and one tested Episode ingest application slice. It defines
 immutable shared identifiers and event metadata, public memory and
-durable-runtime contracts, dependency rules, typed process configuration,
-versioned JSON Schema event contracts, and a transactional in-memory adapter
-for test and development use.
+durable-runtime contracts, dependency rules, typed process configuration, a
+composition root that wires PostgreSQL-backed handlers from settings, versioned
+JSON Schema event contracts, and a transactional in-memory adapter for test and
+development use.
 
-It does **not** contain a running service, dependency-injection container,
-production database or Temporal client, API, worker, external event dispatcher,
-model or tool integration, projection pipeline, or deployable product feature.
-The in-memory adapter is process-local and non-durable. Passing tests prove the
-documented application and architecture contracts; they do not imply that a
-deployable runtime exists.
+It does **not** contain a running HTTP server, worker process, or external event
+dispatcher, a dependency-injection framework, production Temporal client, API
+surface, model or tool integration, projection pipeline, or deployable product
+feature. The in-memory adapter is process-local and non-durable. Passing tests
+prove the documented application and architecture contracts; they do not imply
+that a deployable runtime exists.
 
 ## Module tree
 
@@ -24,6 +25,8 @@ deployable runtime exists.
 services/
 ├── src/engrammesh/
 │   ├── bootstrap/
+│   │   ├── composition.py    # AppRuntime composition root
+│   │   ├── infrastructure.py # default clock, identity, and authorization ports
 │   │   └── settings.py       # typed, immutable configuration boundary
 │   ├── modules/
 │   │   ├── memory/
@@ -65,7 +68,7 @@ framework-independent.
 bootstrap/configuration       module public contracts
            |                           |
            v                           v
- future composition root -> application services -> ports
+ bootstrap/composition.py -> application services -> ports
                                                  -> domain
                                                     |
                                                     v
@@ -112,11 +115,10 @@ Import PostgreSQL types from `engrammesh.modules.memory.adapters.postgres`,
 not from the top-level `engrammesh.modules.memory.adapters` package, which
 exports only the in-memory adapter.
 
-The slice deliberately excludes HTTP, dependency-injection wiring,
-`PostgresSettings` composition-root binding, Temporal, object upload, Claim
-extraction, retrieval, correction and deletion, projections, and external
-Outbox dispatch. The in-memory adapter makes no cross-process durability or
-delivery guarantee.
+The slice deliberately excludes HTTP, dependency-injection framework wiring,
+Temporal, object upload, Claim extraction, retrieval, correction and deletion,
+projections, and external Outbox dispatch. The in-memory adapter makes no
+cross-process durability or delivery guarantee.
 
 ## Application flow
 
@@ -187,10 +189,8 @@ describe unavailable Claim operations and rejected non-`None` stream cursors.
 
 Tenant isolation is enforced in SQL predicates (`tenant_id` on every read and
 write). PostgreSQL row-level security (RLS) policies are deferred to a later
-production-hardening slice. `PostgresSettings` exists in
-`bootstrap/settings.py` but is not wired into the adapter here; a future
-composition root will read `ENGRAMMESH__POSTGRES__DSN` and construct
-`PostgresMemoryDatabase`.
+production-hardening slice. `PostgresSettings` is read through `AppSettings` and
+wired by `bootstrap/composition.py` when memory is enabled.
 
 ### Local PostgreSQL tests
 
@@ -210,6 +210,101 @@ Run the full services suite (postgres and non-postgres) with the same DSN:
 ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engrammesh \
   uv run --python 3.14 --project services pytest services/tests -q
 ```
+
+## Composition root
+
+`bootstrap/composition.py` is the official composition root. It reads typed
+`AppSettings`, opens a PostgreSQL connection pool on startup, and returns a
+cached `RecordEpisodeHandler` wired to infrastructure ports. Only bootstrap may
+import `engrammesh.modules.memory.adapters.postgres` and assemble application
+services.
+
+```python
+from engrammesh.bootstrap.composition import create_runtime, load_settings
+```
+
+`load_settings()` is a thin wrapper around `AppSettings()` for a single
+configuration entry point. `create_runtime()` accepts optional settings and
+defaults to `load_settings()`; it does not call `startup()` until you use
+explicit lifecycle methods or an async context manager.
+
+```bash
+export ENGRAMMESH__ENVIRONMENT=test
+export ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engrammesh
+export ENGRAMMESH__TEMPORAL__NAMESPACE=demo
+export ENGRAMMESH__TEMPORAL__TASK_QUEUE=demo
+PYTHONPATH=services/src PYTHONDONTWRITEBYTECODE=1 \
+  uv run --python 3.14 --project services python - <<'PY'
+import asyncio
+from datetime import UTC, datetime
+from uuid import UUID
+
+from engrammesh.bootstrap.composition import create_runtime, load_settings
+from engrammesh.modules.memory.application.contracts import RecordEpisodeCommand
+from engrammesh.modules.memory.domain.model import (
+    MemoryScope,
+    RetentionClass,
+    Sensitivity,
+    SourceType,
+)
+from engrammesh.shared.kernel.ids import (
+    ArtifactId,
+    CorrelationId,
+    SubjectId,
+    TenantId,
+)
+
+
+async def main() -> None:
+    async with create_runtime(load_settings()) as runtime:
+        handler = runtime.record_episode_handler()
+        command = RecordEpisodeCommand(
+            correlation_id=CorrelationId(UUID(int=3)),
+            actor_id=SubjectId(UUID(int=4)),
+            scope=MemoryScope(
+                tenant_id=TenantId(UUID(int=5)),
+                subject_id=SubjectId(UUID(int=6)),
+                workspace_id="demo",
+            ),
+            source_type=SourceType.USER,
+            content_ref=ArtifactId(UUID(int=7)),
+            observed_at=datetime(2026, 7, 27, 9, 0, tzinfo=UTC),
+            content_hash="sha256:demo",
+            idempotency_key="demo-composed-episode",
+            sensitivity=Sensitivity.CONFIDENTIAL,
+            retention_class=RetentionClass.STANDARD,
+            consent_basis="user_request",
+        )
+        first = await handler.handle(command)
+        replay = await handler.handle(command)
+        print(f"first_created={first.created} replay_created={replay.created}")
+        print(f"same_id={first.episode_id == replay.episode_id}")
+
+
+asyncio.run(main())
+PY
+```
+
+`record_episode_handler()` raises `ConfigurationError` with code
+`memory_disabled` when `modules.memory_enabled` is `False`. It raises
+`RuntimeError` with message `application runtime is not started` when memory is
+enabled but `startup()` has not completed.
+
+### Environment-gated authorization
+
+`EnvironmentGatedMemoryAuthorization` implements `MemoryAuthorizationPort` for
+the composed handler. Until the OIDC slice lands, authorization is gated by
+`ENGRAMMESH__ENVIRONMENT`:
+
+| `Environment` | `authorize(...)` result |
+|---------------|-------------------------|
+| `development` | `True` for all requests |
+| `test`        | `True` for all requests |
+| `staging`     | `False` for all requests |
+| `production`  | `False` for all requests |
+
+Denied authorization surfaces as `EpisodeAuthorizationDenied` from
+`RecordEpisodeHandler` (existing application behavior).
 
 ## Run the example
 
@@ -352,11 +447,11 @@ orchestration is tested separately. `IN_MEMORY_CAPABILITY_CONTRACTS` and
 `POSTGRES_EPISODE_CAPABILITY_CONTRACTS` separately describe each adapter's
 unavailable Claims, rejected cursors, and synchronization model.
 
-Follow-up work for production PostgreSQL includes row-level security policies,
-`PostgresSettings` wiring through an explicit composition root, and broader
-memory surfaces beyond Episode ingest. New shared capability behavior requires
-a separately reviewed contract profile rather than edits to the portable
-Episode assertion bodies.
+Follow-up work for production PostgreSQL includes row-level security policies
+and broader memory surfaces beyond Episode ingest. The next application slice
+is Outbox Relay (poll `memory_outbox_events`, set `published_at`). New shared
+capability behavior requires a separately reviewed contract profile rather than
+edits to the portable Episode assertion bodies.
 
 After separate design review, later phases may add Temporal adapters, APIs,
 workers, and external event dispatch. They must preserve the dependency and
