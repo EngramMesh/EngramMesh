@@ -19,7 +19,7 @@ from engrammesh.modules.memory.application.record_episode import RecordEpisodeHa
 
 
 def load_settings() -> AppSettings:
-    return AppSettings()
+    return AppSettings.model_validate({})
 
 
 def create_runtime(settings: AppSettings | None = None) -> AppRuntime:
