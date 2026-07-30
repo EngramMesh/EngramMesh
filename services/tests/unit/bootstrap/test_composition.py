@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -172,4 +173,44 @@ async def test_relay_outbox_handler_returns_cached_handler() -> None:
         second = runtime.relay_outbox_handler()
         assert isinstance(first, RelayOutboxEventsHandler)
         assert first is second
-        assert runtime.outbox_event_publisher is runtime.outbox_event_publisher
+        publisher = runtime.outbox_event_publisher
+        assert first._publisher is publisher
+        assert second._publisher is publisher
+
+
+@pytest.mark.asyncio
+async def test_shutdown_clears_outbox_publisher() -> None:
+    runtime = create_runtime(_test_settings())
+    with patch(
+        "engrammesh.bootstrap.composition.PostgresMemoryDatabase"
+    ) as database_cls:
+        database_cls.return_value.open = AsyncMock()
+        database_cls.return_value.close = AsyncMock()
+        await runtime.startup()
+        publisher = runtime.outbox_event_publisher
+        await runtime.shutdown()
+        assert runtime.outbox_event_publisher is not publisher
+
+
+@pytest.mark.asyncio
+async def test_run_outbox_relay_loop_exits_immediately_when_stopped() -> None:
+    runtime = create_runtime(_test_settings())
+    stop_event = asyncio.Event()
+    stop_event.set()
+
+    with patch(
+        "engrammesh.bootstrap.composition.PostgresMemoryDatabase"
+    ) as database_cls:
+        database_cls.return_value.open = AsyncMock()
+        database_cls.return_value.close = AsyncMock()
+        await runtime.startup()
+        with patch(
+            "engrammesh.bootstrap.composition.AppRuntime.relay_outbox_once",
+            new_callable=AsyncMock,
+        ) as relay_mock:
+            await runtime.run_outbox_relay_loop(
+                batch_size=10,
+                interval_seconds=0.01,
+                stop_event=stop_event,
+            )
+            relay_mock.assert_not_awaited()

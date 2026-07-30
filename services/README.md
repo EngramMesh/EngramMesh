@@ -290,6 +290,41 @@ PY
 `RuntimeError` with message `application runtime is not started` when memory is
 enabled but `startup()` has not completed.
 
+## Outbox Relay
+
+`RelayOutboxEventsHandler` polls unpublished rows from `memory_outbox_events`,
+dispatches them through `OutboxEventPublisher`, and sets `published_at` only
+after every `publish` call in the batch succeeds. `AppRuntime` wires the relay
+through `relay_outbox_handler()`, `relay_outbox_once()`, and
+`run_outbox_relay_loop()`.
+
+**Naming:** `OutboxPort.publish` (transactional write inside the Episode ingest
+transaction) and `OutboxEventPublisher.publish` (relay dispatch outside the
+store transaction) are distinct responsibilities. Documentation and code reviews
+must keep this distinction explicit.
+
+v1 assumes **one active relay worker per database** (no `SKIP LOCKED`). Rows
+are fetched in global order `occurred_at ASC, event_id ASC`. Delivery is
+**at-least-once**: if the process crashes after successful `publish` calls but
+before `mark_published`, a retry may dispatch the same event again; downstream
+consumers must dedupe by `event_id` (future Inbox slice). When any `publish`
+fails, the handler re-raises immediately, does not call `mark_published`, and
+returns `published=0` (`dispatched` may reflect partial progress).
+
+```python
+async with create_runtime(load_settings()) as runtime:
+    await runtime.record_episode_handler().handle(command)
+    result = await runtime.relay_outbox_once()
+    print(result.published, runtime.outbox_event_publisher.published)
+```
+
+`relay_outbox_handler()` raises `ConfigurationError` with code `memory_disabled`
+when memory is disabled (checked before relay-specific errors), then
+`outbox_relay_disabled` when `outbox_relay.enabled` is `False`, and
+`RuntimeError` when the runtime is not started. The default
+`LoggingOutboxEventPublisher` records dispatched events in-process for tests;
+production brokers implement the same port without changing the handler.
+
 ### Environment-gated authorization
 
 `EnvironmentGatedMemoryAuthorization` implements `MemoryAuthorizationPort` for
@@ -449,9 +484,9 @@ unavailable Claims, rejected cursors, and synchronization model.
 
 Follow-up work for production PostgreSQL includes row-level security policies
 and broader memory surfaces beyond Episode ingest. The next application slice
-is Outbox Relay (poll `memory_outbox_events`, set `published_at`). New shared
-capability behavior requires a separately reviewed contract profile rather than
-edits to the portable Episode assertion bodies.
+is an HTTP API for `RecordEpisodeCommand`. New shared capability behavior
+requires a separately reviewed contract profile rather than edits to the
+portable Episode assertion bodies.
 
 After separate design review, later phases may add Temporal adapters, APIs,
 workers, and external event dispatch. They must preserve the dependency and
