@@ -10,6 +10,7 @@ from engrammesh.bootstrap.settings import (
     ModuleSettings,
 )
 from engrammesh.modules.memory.application.record_episode import RecordEpisodeHandler
+from engrammesh.modules.memory.application.relay_outbox import RelayOutboxEventsHandler
 
 
 def _test_settings(**overrides: object) -> AppSettings:
@@ -123,3 +124,52 @@ async def test_record_episode_handler_returns_cached_handler() -> None:
         second = runtime.record_episode_handler()
         assert isinstance(first, RecordEpisodeHandler)
         assert first is second
+
+
+def test_relay_outbox_handler_when_memory_disabled_raises() -> None:
+    runtime = create_runtime(
+        _test_settings(
+            modules=ModuleSettings(memory_enabled=False),
+            outbox_relay={"enabled": False},
+        )
+    )
+    with pytest.raises(ConfigurationError) as exc_info:
+        runtime.relay_outbox_handler()
+    assert exc_info.value.code == "memory_disabled"
+
+
+@pytest.mark.asyncio
+async def test_relay_outbox_handler_when_outbox_relay_disabled_raises() -> None:
+    runtime = create_runtime(_test_settings(outbox_relay={"enabled": False}))
+    with patch(
+        "engrammesh.bootstrap.composition.PostgresMemoryDatabase"
+    ) as database_cls:
+        database_cls.return_value.open = AsyncMock()
+        database_cls.return_value.close = AsyncMock()
+        await runtime.startup()
+        with pytest.raises(ConfigurationError) as exc_info:
+            runtime.relay_outbox_handler()
+        assert exc_info.value.code == "outbox_relay_disabled"
+
+
+@pytest.mark.asyncio
+async def test_relay_outbox_handler_before_startup_raises() -> None:
+    runtime = create_runtime(_test_settings())
+    with pytest.raises(RuntimeError, match="application runtime is not started"):
+        runtime.relay_outbox_handler()
+
+
+@pytest.mark.asyncio
+async def test_relay_outbox_handler_returns_cached_handler() -> None:
+    runtime = create_runtime(_test_settings())
+    with patch(
+        "engrammesh.bootstrap.composition.PostgresMemoryDatabase"
+    ) as database_cls:
+        database_cls.return_value.open = AsyncMock()
+        database_cls.return_value.close = AsyncMock()
+        await runtime.startup()
+        first = runtime.relay_outbox_handler()
+        second = runtime.relay_outbox_handler()
+        assert isinstance(first, RelayOutboxEventsHandler)
+        assert first is second
+        assert runtime.outbox_event_publisher is runtime.outbox_event_publisher

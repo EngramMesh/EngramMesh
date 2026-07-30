@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from engrammesh.bootstrap.settings import Environment
 from engrammesh.modules.memory.ports import AuthorizationRequest
+from engrammesh.shared.kernel.events import EventEnvelope
 from engrammesh.shared.kernel.ids import EventId, MemoryId
 
 
@@ -24,6 +25,23 @@ class UuidMemoryIdentityPort:
 
     async def new_event_id(self) -> EventId:
         return EventId(uuid4())
+
+
+@final
+class LoggingOutboxEventPublisher:
+    """In-process publisher that records dispatched events for tests."""
+
+    __slots__ = ("_published",)
+
+    def __init__(self) -> None:
+        self._published: list[EventEnvelope] = []
+
+    @property
+    def published(self) -> tuple[EventEnvelope, ...]:
+        return tuple(self._published)
+
+    async def publish(self, event: EventEnvelope) -> None:
+        self._published.append(event)
 
 
 @final

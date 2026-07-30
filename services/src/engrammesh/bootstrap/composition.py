@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import TracebackType
 from typing import Self, final
 
 from engrammesh.bootstrap.infrastructure import (
     EnvironmentGatedMemoryAuthorization,
+    LoggingOutboxEventPublisher,
     SystemUtcClock,
     UuidMemoryIdentityPort,
 )
@@ -14,8 +16,14 @@ from engrammesh.bootstrap.settings import AppSettings, ConfigurationError
 from engrammesh.modules.memory.adapters.postgres import (
     PostgresMemoryDatabase,
     PostgresMemoryUnitOfWorkFactory,
+    PostgresOutboxRelayStore,
+)
+from engrammesh.modules.memory.application.contracts import (
+    RelayOutboxCommand,
+    RelayOutboxResult,
 )
 from engrammesh.modules.memory.application.record_episode import RecordEpisodeHandler
+from engrammesh.modules.memory.application.relay_outbox import RelayOutboxEventsHandler
 
 
 def load_settings() -> AppSettings:
@@ -31,6 +39,8 @@ class AppRuntime:
     __slots__ = (
         "_database",
         "_handler",
+        "_outbox_publisher",
+        "_relay_handler",
         "_settings",
         "_started",
         "_unit_of_work_factory",
@@ -41,6 +51,8 @@ class AppRuntime:
         self._database: PostgresMemoryDatabase | None = None
         self._unit_of_work_factory: PostgresMemoryUnitOfWorkFactory | None = None
         self._handler: RecordEpisodeHandler | None = None
+        self._outbox_publisher = LoggingOutboxEventPublisher()
+        self._relay_handler: RelayOutboxEventsHandler | None = None
         self._started = False
 
     @property
@@ -65,9 +77,15 @@ class AppRuntime:
         self._database = None
         self._unit_of_work_factory = None
         self._handler = None
+        self._relay_handler = None
+        self._outbox_publisher = LoggingOutboxEventPublisher()
         self._started = False
         if database is not None:
             await database.close()
+
+    @property
+    def outbox_event_publisher(self) -> LoggingOutboxEventPublisher:
+        return self._outbox_publisher
 
     def record_episode_handler(self) -> RecordEpisodeHandler:
         if not self._settings.modules.memory_enabled:
@@ -86,6 +104,59 @@ class AppRuntime:
                 unit_of_work_factory=self._unit_of_work_factory,
             )
         return self._handler
+
+    def relay_outbox_handler(self) -> RelayOutboxEventsHandler:
+        if not self._settings.modules.memory_enabled:
+            msg = "memory module is disabled"
+            raise ConfigurationError("memory_disabled", msg)
+        if not self._started or self._database is None:
+            msg = "application runtime is not started"
+            raise RuntimeError(msg)
+        if not self._settings.outbox_relay.enabled:
+            msg = "outbox relay is disabled"
+            raise ConfigurationError("outbox_relay_disabled", msg)
+        if self._relay_handler is None:
+            self._relay_handler = RelayOutboxEventsHandler(
+                clock=SystemUtcClock(),
+                store=PostgresOutboxRelayStore(self._database),
+                publisher=self._outbox_publisher,
+            )
+        return self._relay_handler
+
+    async def relay_outbox_once(
+        self,
+        *,
+        batch_size: int | None = None,
+    ) -> RelayOutboxResult:
+        handler = self.relay_outbox_handler()
+        size = (
+            batch_size
+            if batch_size is not None
+            else self._settings.outbox_relay.batch_size
+        )
+        return await handler.handle(RelayOutboxCommand(batch_size=size))
+
+    async def run_outbox_relay_loop(
+        self,
+        *,
+        batch_size: int | None = None,
+        interval_seconds: float | None = None,
+        stop_event: asyncio.Event,
+    ) -> None:
+        size = (
+            batch_size
+            if batch_size is not None
+            else self._settings.outbox_relay.batch_size
+        )
+        interval = (
+            interval_seconds
+            if interval_seconds is not None
+            else self._settings.outbox_relay.poll_interval_seconds
+        )
+        while not stop_event.is_set():
+            result = await self.relay_outbox_once(batch_size=size)
+            if result.fetched < size:
+                await asyncio.sleep(interval)
 
     async def __aenter__(self) -> Self:
         await self.startup()
