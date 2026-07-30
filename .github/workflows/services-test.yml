@@ -23,6 +23,11 @@ jobs:
           POSTGRES_DB: engrammesh
         ports:
           - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U engrammesh -d engrammesh"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       ENGRAMMESH__POSTGRES__DSN: postgresql://engrammesh:engrammesh@localhost:5432/engrammesh
     steps:

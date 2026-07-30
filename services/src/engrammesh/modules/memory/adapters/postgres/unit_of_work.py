@@ -328,10 +328,12 @@ class _PostgresOutboxPort:
                     """,
                     {"aggregate_id": event.aggregate_id.value},
                 )
-                aggregate = await cursor.fetchone()
-            if aggregate is None:
+                tenants = await cursor.fetchall()
+            if not tenants:
                 raise ValueError(_EVENT_AGGREGATE_UNKNOWN)
-            if aggregate["tenant_id"] != event.tenant_id.value:
+            if not any(
+                row["tenant_id"] == event.tenant_id.value for row in tenants
+            ):
                 raise ValueError(_EVENT_TENANT_MISMATCH)
         event_row = event_to_row(event)
         await self._state.connection.execute(
