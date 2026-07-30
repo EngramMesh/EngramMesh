@@ -308,8 +308,10 @@ are fetched in global order `occurred_at ASC, event_id ASC`. Delivery is
 **at-least-once**: if the process crashes after successful `publish` calls but
 before `mark_published`, a retry may dispatch the same event again; downstream
 consumers must dedupe by `event_id` (future Inbox slice). When any `publish`
-fails, the handler re-raises immediately, does not call `mark_published`, and
-returns `published=0` (`dispatched` may reflect partial progress).
+fails, the handler re-raises immediately and does not call `mark_published`;
+callers do not receive a `RelayOutboxResult` on failure. Events successfully
+dispatched before the failure may have been delivered but remain unmarked
+(`published_at` still NULL).
 
 ```python
 async with create_runtime(load_settings()) as runtime:

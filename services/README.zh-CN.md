@@ -207,7 +207,7 @@ PY
 
 **命名：** `OutboxPort.publish`（Episode 摄取事务内的写入）与 `OutboxEventPublisher.publish`（store 事务外的中继分发）是不同职责，文档与代码评审必须明确区分。
 
-v1 假定**每个数据库仅有一个活跃中继 Worker**（无 `SKIP LOCKED`）。行按全局顺序 `occurred_at ASC, event_id ASC` 获取。投递为**至少一次**：若在成功 `publish` 之后、`mark_published` 之前进程崩溃，重试可能再次分发同一事件；下游消费者须按 `event_id` 去重（未来 Inbox 切片）。任一 `publish` 失败时，Handler 立即重新抛出，不调用 `mark_published`，并返回 `published=0`（`dispatched` 可能反映部分进度）。
+v1 假定**每个数据库仅有一个活跃中继 Worker**（无 `SKIP LOCKED`）。行按全局顺序 `occurred_at ASC, event_id ASC` 获取。投递为**至少一次**：若在成功 `publish` 之后、`mark_published` 之前进程崩溃，重试可能再次分发同一事件；下游消费者须按 `event_id` 去重（未来 Inbox 切片）。任一 `publish` 失败时，Handler 立即重新抛出，不调用 `mark_published`；调用方不会收到 `RelayOutboxResult`。失败前已成功 dispatch 的事件可能已投递，但 `published_at` 仍为 NULL。
 
 ```python
 async with create_runtime(load_settings()) as runtime:
