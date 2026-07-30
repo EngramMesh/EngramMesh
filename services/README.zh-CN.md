@@ -209,16 +209,70 @@ PY
 
 **命名：** `OutboxPort.publish`（Episode 摄取事务内的写入）与 `OutboxEventPublisher.publish`（store 事务外的中继分发）是不同职责，文档与代码评审必须明确区分。
 
-v1 假定**每个数据库仅有一个活跃中继 Worker**（无 `SKIP LOCKED`）。行按全局顺序 `occurred_at ASC, event_id ASC` 获取。投递为**至少一次**：若在成功 `publish` 之后、`mark_published` 之前进程崩溃，重试可能再次分发同一事件；下游消费者须按 `event_id` 去重（未来 Inbox 切片）。任一 `publish` 失败时，Handler 立即重新抛出，不调用 `mark_published`；调用方不会收到 `RelayOutboxResult`。失败前已成功 dispatch 的事件可能已投递，但 `published_at` 仍为 NULL。
+v1 假定**每个数据库仅有一个活跃中继 Worker**（无 `SKIP LOCKED`）。行按全局顺序 `occurred_at ASC, event_id ASC` 获取。投递为**至少一次**：若在成功 `publish` 之后、`mark_published` 之前进程崩溃，重试可能再次分发同一事件；下游消费者须按 `event_id` 去重（见 [Inbox 消费者](#inbox-消费者)）。任一 `publish` 失败时，Handler 立即重新抛出，不调用 `mark_published`；调用方不会收到 `RelayOutboxResult`。失败前已成功 dispatch 的事件可能已投递，但 `published_at` 仍为 NULL。
 
 ```python
 async with create_runtime(load_settings()) as runtime:
     await runtime.record_episode_handler().handle(command)
     result = await runtime.relay_outbox_once()
-    print(result.published, runtime.outbox_event_publisher.published)
+    print(result.published, runtime.logging_outbox_event_publisher.published)
 ```
 
 `relay_outbox_handler()` 在 memory 禁用时抛出 code 为 `memory_disabled` 的 `ConfigurationError`（先于中继相关错误检查），在 `outbox_relay.enabled` 为 `False` 时抛出 `outbox_relay_disabled`，在运行时未启动时抛出 `RuntimeError`。默认 `LoggingOutboxEventPublisher` 在进程内记录已分发事件供测试使用；生产消息中间件实现同一 Port，无需修改 Handler。
+
+## Inbox 消费者
+
+当 `inbox.enabled` 为 `True`（默认）时，中继分发经 `InboxOutboxEventPublisher` 流转：先执行 Inbox 处理，再调用日志委托。`ProcessInboxEventHandler` 将受支持的事件路由到可插拔 Processor；v1 注册 `EpisodeRecordedProcessor` 对 `memory.episode-recorded` 做结构不变量校验（无投影副作用）。
+
+```text
+RelayOutboxEventsHandler
+  → InboxOutboxEventPublisher.publish(event)
+      → ProcessInboxEventHandler.handle(event)
+          → 按 event_type 选择 InboxEventProcessor
+          → InboxStore.try_record(event_id, ...)
+          → EpisodeRecordedProcessor.process(event)
+          → 失败时：InboxStore.remove_record(event_id)
+      → LoggingOutboxEventPublisher.publish(event)   # 仅测试可见性
+  → OutboxRelayStore.mark_published(...)
+```
+
+**委托与 Inbox 权威：** `InboxOutboxEventPublisher` 在 Inbox 处理后始终调用日志委托，包括 Handler 返回 `skipped=True`（重复或不支持的事件）时。测试中断言分发可见性请用 `logging_outbox_event_publisher.published`；已处理权威请查 `memory_inbox_events` 行数。`LoggingOutboxEventPublisher.published` **不是**去重权威来源。
+
+| 结果 | `processed` | `skipped` | Inbox 行 |
+|------|-------------|-----------|----------|
+| 不支持的 `event_type` | `False` | `True` | 不写入 |
+| 重复 `event_id` | `False` | `True` | 不变 |
+| 新事件处理成功 | `True` | `False` | 已写入 |
+
+`try_record` 之后 Processor 失败会调用 `remove_record` 并重新抛出，中继不会 `mark_published`，从而可重试。不支持的事件类型跳过且不写 Inbox。
+
+迁移 `003_inbox_events.sql` 创建 `memory_inbox_events`，主键为 `event_id uuid`。**v1 去重键仅为 `event_id`**（每库全局、单消费者）。`consumer_name` 用于审计与未来多消费者迁移，不参与主键；若多个消费者处理同一 `event_id`，需迁移为复合主键。
+
+### 配置
+
+```python
+class InboxSettings:
+    enabled: bool = True
+    consumer_name: str = "episode-recorded-v1"
+```
+
+| 环境变量 | 默认值 |
+|---------|--------|
+| `ENGRAMMESH__INBOX__ENABLED` | `true` |
+| `ENGRAMMESH__INBOX__CONSUMER_NAME` | `episode-recorded-v1` |
+
+当 `inbox.enabled=False` 时，`AppRuntime` 仅使用 `LoggingOutboxEventPublisher`，行为与 Inbox 引入前的中继路径一致（不写 Inbox 表）。这是未应用迁移 `003` 或需回归验证时的回滚开关。
+
+```python
+async with create_runtime(load_settings()) as runtime:
+    await runtime.record_episode_handler().handle(command)
+    await runtime.relay_outbox_once()
+    # 分发可见性（可能含重投）：
+    runtime.logging_outbox_event_publisher.published
+    # 已处理权威 — 查询 memory_inbox_events
+```
+
+`outbox_event_publisher` 返回已装配的发布者（`InboxOutboxEventPublisher` 或 `LoggingOutboxEventPublisher`）。`logging_outbox_event_publisher` 始终暴露内部委托。需要 Inbox 处理时通过 `process_inbox_handler()` 构建 Handler。
 
 ### 环境门控授权
 

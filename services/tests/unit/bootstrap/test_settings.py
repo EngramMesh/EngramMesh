@@ -9,6 +9,7 @@ from engrammesh.bootstrap.settings import (
     ConfigurationError,
     Environment,
     HttpSettings,
+    InboxSettings,
     ModuleSettings,
     OutboxRelaySettings,
     PostgresSettings,
@@ -23,6 +24,7 @@ EXPECTED_MODEL_FIELDS: Mapping[type[object], tuple[str, ...]] = {
     ModuleSettings: ("memory_enabled", "runtime_enabled"),
     HttpSettings: ("enabled", "host", "port"),
     OutboxRelaySettings: ("enabled", "batch_size", "poll_interval_seconds"),
+    InboxSettings: ("enabled", "consumer_name"),
     AppSettings: (
         "configuration_schema_version",
         "environment",
@@ -31,6 +33,7 @@ EXPECTED_MODEL_FIELDS: Mapping[type[object], tuple[str, ...]] = {
         "telemetry",
         "modules",
         "http",
+        "inbox",
         "outbox_relay",
     ),
 }

@@ -42,6 +42,12 @@ Semantic Versioning after its first public release.
   HTTP scope vs Outbox event scope separation, unit and integration tests, and
   bilingual services documentation (endpoints, errors, staging/production write
   restriction, `curl` example, server start command).
+- Inbox consumer and `memory.episode-recorded` processor: `InboxStore` with
+  `event_id` deduplication, `ProcessInboxEventHandler`, `EpisodeRecordedProcessor`,
+  `InboxOutboxEventPublisher`, migration `003_inbox_events.sql`,
+  `inbox.enabled` rollback switch, composed record→relay→inbox integration
+  coverage, and bilingual services documentation (delegate vs inbox authority,
+  v1 single-consumer `event_id` primary key).
 
 ### Changed
 

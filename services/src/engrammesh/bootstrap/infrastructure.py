@@ -7,7 +7,10 @@ from typing import final
 from uuid import uuid4
 
 from engrammesh.bootstrap.settings import Environment
-from engrammesh.modules.memory.ports import AuthorizationRequest
+from engrammesh.modules.memory.application.process_inbox_event import (
+    ProcessInboxEventHandler,
+)
+from engrammesh.modules.memory.ports import AuthorizationRequest, OutboxEventPublisher
 from engrammesh.shared.kernel.events import EventEnvelope
 from engrammesh.shared.kernel.ids import EventId, MemoryId
 
@@ -42,6 +45,26 @@ class LoggingOutboxEventPublisher:
 
     async def publish(self, event: EventEnvelope) -> None:
         self._published.append(event)
+
+
+@final
+class InboxOutboxEventPublisher:
+    """Dispatch outbox events through inbox processing then a delegate."""
+
+    __slots__ = ("_delegate", "_inbox_handler")
+
+    def __init__(
+        self,
+        *,
+        inbox_handler: ProcessInboxEventHandler,
+        delegate: OutboxEventPublisher,
+    ) -> None:
+        self._inbox_handler = inbox_handler
+        self._delegate = delegate
+
+    async def publish(self, event: EventEnvelope) -> None:
+        await self._inbox_handler.handle(event)
+        await self._delegate.publish(event)
 
 
 @final

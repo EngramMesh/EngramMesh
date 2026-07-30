@@ -101,6 +101,21 @@ class HttpSettings(_FrozenSettingsModel):
     port: int = 8080
 
 
+class InboxSettings(_FrozenSettingsModel):
+    """Inbox consumer dedup and processing boundary."""
+
+    enabled: bool = True
+    consumer_name: str = "episode-recorded-v1"
+
+    @field_validator("consumer_name")
+    @classmethod
+    def require_non_blank(cls, value: str) -> str:
+        if not value.strip():
+            msg = "consumer_name must not be blank"
+            raise ValueError(msg)
+        return value
+
+
 class OutboxRelaySettings(_FrozenSettingsModel):
     """Outbox relay polling and batch dispatch boundary."""
 
@@ -143,6 +158,7 @@ class AppSettings(BaseSettings):
     telemetry: TelemetrySettings = TelemetrySettings()
     modules: ModuleSettings = ModuleSettings()
     http: HttpSettings = HttpSettings()
+    inbox: InboxSettings = InboxSettings()
     outbox_relay: OutboxRelaySettings = OutboxRelaySettings()
 
     @model_validator(mode="after")

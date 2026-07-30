@@ -16,7 +16,7 @@ from engrammesh.modules.memory.domain.model import (
     Sensitivity,
 )
 from engrammesh.shared.kernel.events import EventEnvelope
-from engrammesh.shared.kernel.ids import EventId, MemoryId, SubjectId
+from engrammesh.shared.kernel.ids import EventId, MemoryId, SubjectId, TenantId
 
 
 def _require_optional_aware(value: datetime | None, field_name: str) -> None:
@@ -225,6 +225,32 @@ class OutboxEventPublisher(Protocol):
     """Relay dispatch boundary for published outbox events."""
 
     async def publish(self, event: EventEnvelope) -> None: ...
+
+
+@runtime_checkable
+class InboxStore(Protocol):
+    """Durable inbox deduplication boundary for relay consumers."""
+
+    async def try_record(
+        self,
+        *,
+        event_id: EventId,
+        consumer_name: str,
+        event_type: str,
+        tenant_id: TenantId,
+        processed_at: datetime,
+    ) -> bool: ...
+
+    async def remove_record(self, *, event_id: EventId) -> None: ...
+
+
+@runtime_checkable
+class InboxEventProcessor(Protocol):
+    """Processes one supported inbox event type."""
+
+    def supports(self, event_type: str) -> bool: ...
+
+    async def process(self, event: EventEnvelope) -> None: ...
 
 
 @runtime_checkable
