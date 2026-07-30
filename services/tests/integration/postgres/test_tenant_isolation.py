@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import replace
 
 import psycopg
 import pytest
@@ -11,6 +12,7 @@ from contract.memory_adapter_contract import (
     TENANT_A,
     TENANT_B,
     make_episode,
+    make_event,
     make_scope,
     memory_id,
 )
@@ -95,3 +97,37 @@ async def test_same_subject_different_tenant_is_invisible(
         assert await unit_of_work.episodes.stream(scope_b) == ()
         assert await unit_of_work.episodes.get(scope_a, memory_id(99)) is None
         assert await unit_of_work.episodes.get(scope_a, episode.id) == episode
+
+
+@pytest.mark.asyncio
+async def test_outbox_publish_succeeds_when_episode_id_is_shared_across_tenants(
+    unit_of_work_factory: PostgresMemoryUnitOfWorkFactory,
+) -> None:
+    shared_id = memory_id(42)
+    scope_a = make_scope(tenant_id=TENANT_A)
+    scope_b = make_scope(tenant_id=TENANT_B)
+    episode_a = replace(
+        make_episode(1, scope=scope_a),
+        id=shared_id,
+        idempotency_key="tenant-a",
+    )
+    episode_b = replace(
+        make_episode(2, scope=scope_b),
+        id=shared_id,
+        idempotency_key="tenant-b",
+    )
+
+    for episode in (episode_a, episode_b):
+        async with unit_of_work_factory.create() as unit_of_work:
+            await unit_of_work.episodes.append(episode)
+            await unit_of_work.commit()
+
+    event_a = make_event(1, episode=episode_a)
+    async with unit_of_work_factory.create() as unit_of_work:
+        await unit_of_work.outbox.publish(event_a)
+        await unit_of_work.commit()
+
+    event_b = make_event(2, episode=episode_b)
+    async with unit_of_work_factory.create() as unit_of_work:
+        await unit_of_work.outbox.publish(event_b)
+        await unit_of_work.commit()
