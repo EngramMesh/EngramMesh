@@ -23,6 +23,7 @@ pythonpath = ["src"]
 testpaths = ["tests"]
 markers = [
     "postgres: requires ENGRAMMESH__POSTGRES__DSN or test fixture DSN",
+    "xdist_group(name): assign tests to a pytest-xdist group for serial execution",
 ]
 
 [tool.mypy]

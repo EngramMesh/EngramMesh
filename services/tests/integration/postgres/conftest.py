@@ -1,4 +1,4 @@
-"""Shared PostgreSQL integration test fixtures."""
+"""Shared PostgreSQL test fixtures."""
 
 from __future__ import annotations
 
@@ -20,12 +20,6 @@ _DATA_TABLES = (
 )
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    for item in items:
-        if item.get_closest_marker("postgres") is not None:
-            item.add_marker(pytest.mark.xdist_group(name="postgres_serial"))
-
-
 def _postgres_dsn() -> str | None:
     return os.environ.get(POSTGRES_DSN_ENV)
 
@@ -42,7 +36,6 @@ def postgres_dsn() -> str:
 def postgres_connection(postgres_dsn: str) -> Iterator[Connection]:
     with psycopg.connect(postgres_dsn) as connection:
         apply_migrations(connection)
-        connection.commit()
         yield connection
         with connection.transaction():
             connection.execute(
