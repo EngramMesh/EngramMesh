@@ -30,6 +30,11 @@ Semantic Versioning after its first public release.
   `load_settings`, `AppRuntime`, `create_runtime`, environment-gated authorization,
   PostgreSQL wiring and pool lifecycle, and composed Episode ingest integration
   coverage.
+- Outbox Relay application slice: `RelayOutboxEventsHandler`,
+  `PostgresOutboxRelayStore`, `LoggingOutboxEventPublisher`, partial index
+  migration, `AppRuntime.relay_outbox_once` / `run_outbox_relay_loop`, composed
+  relay integration coverage, and bilingual services documentation for relay
+  semantics (`OutboxPort` vs `OutboxEventPublisher`, at-least-once delivery).
 
 ### Changed
 

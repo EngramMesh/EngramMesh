@@ -201,6 +201,23 @@ PY
 
 当 `modules.memory_enabled` 为 `False` 时，`record_episode_handler()` 抛出 code 为 `memory_disabled` 的 `ConfigurationError`。当 memory 已启用但 `startup()` 尚未完成时，抛出消息为 `application runtime is not started` 的 `RuntimeError`。
 
+## Outbox Relay
+
+`RelayOutboxEventsHandler` 轮询 `memory_outbox_events` 中未发布的行，通过 `OutboxEventPublisher` 分发，并仅在批次内所有 `publish` 调用成功后设置 `published_at`。`AppRuntime` 通过 `relay_outbox_handler()`、`relay_outbox_once()` 与 `run_outbox_relay_loop()` 装配该中继。
+
+**命名：** `OutboxPort.publish`（Episode 摄取事务内的写入）与 `OutboxEventPublisher.publish`（store 事务外的中继分发）是不同职责，文档与代码评审必须明确区分。
+
+v1 假定**每个数据库仅有一个活跃中继 Worker**（无 `SKIP LOCKED`）。行按全局顺序 `occurred_at ASC, event_id ASC` 获取。投递为**至少一次**：若在成功 `publish` 之后、`mark_published` 之前进程崩溃，重试可能再次分发同一事件；下游消费者须按 `event_id` 去重（未来 Inbox 切片）。任一 `publish` 失败时，Handler 立即重新抛出，不调用 `mark_published`，并返回 `published=0`（`dispatched` 可能反映部分进度）。
+
+```python
+async with create_runtime(load_settings()) as runtime:
+    await runtime.record_episode_handler().handle(command)
+    result = await runtime.relay_outbox_once()
+    print(result.published, runtime.outbox_event_publisher.published)
+```
+
+`relay_outbox_handler()` 在 memory 禁用时抛出 code 为 `memory_disabled` 的 `ConfigurationError`（先于中继相关错误检查），在 `outbox_relay.enabled` 为 `False` 时抛出 `outbox_relay_disabled`，在运行时未启动时抛出 `RuntimeError`。默认 `LoggingOutboxEventPublisher` 在进程内记录已分发事件供测试使用；生产消息中间件实现同一 Port，无需修改 Handler。
+
 ### 环境门控授权
 
 `EnvironmentGatedMemoryAuthorization` 为组合 Handler 实现 `MemoryAuthorizationPort`。在 OIDC 切片落地之前，授权由 `ENGRAMMESH__ENVIRONMENT` 门控：
@@ -343,6 +360,6 @@ ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engr
 
 PostgreSQL Episode Adapter 已通过其类型化 Harness 绑定 `tests/contract/memory_adapter_contract.py` 中 `EPISODE_ADAPTER_CONTRACTS` 的每个断言，且未修改可复用断言主体。核心 Registry 不假定单一全局锁，也不要求 Claim 操作或游标不可用。可复用断言模块只导入公共记忆 Port、领域值与共享契约；应用编排由其他测试单独验证。`IN_MEMORY_CAPABILITY_CONTRACTS` 与 `POSTGRES_EPISODE_CAPABILITY_CONTRACTS` 分别描述各 Adapter 的不可用 Claim、拒绝游标与同步模型。
 
-生产 PostgreSQL 的后续工作包括行级安全（RLS）策略，以及 Episode 摄取之外的更广泛记忆表面。下一个应用切片是 Outbox Relay（轮询 `memory_outbox_events` 并设置 `published_at`）。新增共享能力行为需要单独评审的契约 Profile，而不是修改可移植 Episode 断言主体。
+生产 PostgreSQL 的后续工作包括行级安全（RLS）策略，以及 Episode 摄取之外的更广泛记忆表面。下一个应用切片是为 `RecordEpisodeCommand` 提供 HTTP API。新增共享能力行为需要单独评审的契约 Profile，而不是修改可移植 Episode 断言主体。
 
 经过单独设计评审后，后续阶段可增加 Temporal Adapter、API、Worker 与外部事件分发。它们必须保留上述依赖与权威边界；本指南不预先授权任何供应商或可部署产品功能。
