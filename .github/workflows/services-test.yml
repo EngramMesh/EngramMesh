@@ -1,0 +1,40 @@
+name: Services test
+
+"on":
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  services-test:
+    name: services-test
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: engrammesh
+          POSTGRES_PASSWORD: engrammesh
+          POSTGRES_DB: engrammesh
+        ports:
+          - 5432:5432
+    env:
+      ENGRAMMESH__POSTGRES__DSN: postgresql://engrammesh:engrammesh@localhost:5432/engrammesh
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - name: Run tests
+        run: uv run --python 3.14 --project services pytest services/tests -q
+      - name: Run Ruff
+        run: uv run --python 3.14 --project services ruff check services/src services/tests
+      - name: Run mypy
+        run: uv run --python 3.14 --project services mypy services/src
