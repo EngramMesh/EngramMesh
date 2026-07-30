@@ -22,6 +22,7 @@ _EPISODE_IDEMPOTENCY_CONFLICT_MESSAGE = (
     "idempotency key conflicts with an existing episode"
 )
 _VALIDATION_ERROR_MESSAGE = "request validation failed"
+_SERVICE_UNAVAILABLE_MESSAGE = "service is unavailable"
 _INTERNAL_ERROR_MESSAGE = "internal server error"
 
 
@@ -132,7 +133,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=503,
             content=error_envelope(
                 "service_unavailable",
-                str(exc),
+                _SERVICE_UNAVAILABLE_MESSAGE,
                 details=exc.errors(),
             ),
         )

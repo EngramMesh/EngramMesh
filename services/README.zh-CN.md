@@ -253,6 +253,15 @@ from engrammesh.bootstrap.http.app import create_app
 
 路径 `tenant_id` 必须与 body `scope.tenant_id` 一致；不一致返回 **422**。
 
+**成功响应体：**
+
+| 端点 | 状态码 | 响应体 |
+|------|--------|--------|
+| `GET /health` | `200` | `{ "status": "ok" }` |
+| `GET /ready` | `200` | `{ "status": "ready" }` |
+| `POST .../episodes` | `201` | `{ "episode_id": "<uuid>", "created": true }` |
+| `POST .../episodes` | `200` | `{ "episode_id": "<uuid>", "created": false }`（幂等重放） |
+
 ### HTTP scope 与事件 scope 差异
 
 HTTP 请求体使用独立传输 Schema（`record-episode-request.schema.json`），**不得**复用 Outbox 事件 payload Schema。
@@ -301,7 +310,10 @@ Episode 摄取错误使用统一信封：
 | `database_unavailable` | PostgreSQL 连接池不可用或 `SELECT 1` 失败 |
 | `memory_disabled` | `modules.memory_enabled` 为 `False` |
 
-Episode 路由上的 `ReadinessError` 使用相同的 `not_ready` 体（非 `error` 信封）。
+`GET /ready` 使用上述 `not_ready` 体。Episode `POST` **不**调用 `check_ready()`；
+`memory_disabled` 时 `POST` 返回 `error` 信封，`code` 为 `service_unavailable`（见错误表）。
+若在 `AppRuntime.startup()` 完成前调用 `POST`，`record_episode_handler()` 抛出
+`RuntimeError`，映射为 **500** `internal_error`。
 
 ### 启动 HTTP 服务
 
@@ -346,6 +358,12 @@ curl -sS -X POST "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-37945
 
 ```json
 { "episode_id": "<uuid>", "created": true }
+```
+
+使用相同请求重放可观察幂等响应（`200`）：
+
+```json
+{ "episode_id": "<相同-uuid>", "created": false }
 ```
 
 ## 运行示例

@@ -374,6 +374,15 @@ server generates a new correlation ID. Non-UUID values return **422**.
 
 Path `tenant_id` must match body `scope.tenant_id`; a mismatch returns **422**.
 
+**Success response bodies:**
+
+| Endpoint | Status | Body |
+|----------|--------|------|
+| `GET /health` | `200` | `{ "status": "ok" }` |
+| `GET /ready` | `200` | `{ "status": "ready" }` |
+| `POST .../episodes` | `201` | `{ "episode_id": "<uuid>", "created": true }` |
+| `POST .../episodes` | `200` | `{ "episode_id": "<uuid>", "created": false }` (idempotent replay) |
+
 ### HTTP scope vs event scope
 
 HTTP request bodies use an independent transport schema
@@ -425,8 +434,11 @@ When not ready, `GET /ready` returns **503**:
 | `database_unavailable` | PostgreSQL pool unavailable or `SELECT 1` failed |
 | `memory_disabled` | `modules.memory_enabled` is `False` |
 
-`ReadinessError` on episode routes uses the same `not_ready` body (not the
-`error` envelope).
+`GET /ready` uses the `not_ready` body above. Episode `POST` does **not** call
+`check_ready()`; `memory_disabled` on `POST` returns the `error` envelope with
+`service_unavailable` (see the error table). If `POST` runs before
+`AppRuntime.startup()` completes, `record_episode_handler()` raises
+`RuntimeError`, which maps to **500** `internal_error`.
 
 ### Start the HTTP server
 
@@ -474,6 +486,12 @@ Expected first-write response (`201`):
 
 ```json
 { "episode_id": "<uuid>", "created": true }
+```
+
+Repeat the same request to observe an idempotent replay (`200`):
+
+```json
+{ "episode_id": "<same-uuid>", "created": false }
 ```
 
 ## Run the example
