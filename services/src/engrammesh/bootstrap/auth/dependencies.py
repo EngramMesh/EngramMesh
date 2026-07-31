@@ -19,19 +19,15 @@ from engrammesh.bootstrap.auth.ports import AuthenticatedPrincipal, TokenVerifie
 from engrammesh.bootstrap.settings import ConfigurationError
 from engrammesh.shared.kernel.ids import TenantId
 
-_BEARER_PREFIX = "Bearer "
-
 
 def parse_bearer_token(authorization: str | None) -> str:
     """Extract the JWT from the Authorization header."""
     if authorization is None or not authorization.strip():
         raise AuthenticationRequiredError()
-    if not authorization.startswith(_BEARER_PREFIX):
+    scheme, _, remainder = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not remainder.strip():
         raise InvalidTokenError()
-    token = authorization[len(_BEARER_PREFIX) :]
-    if not token:
-        raise InvalidTokenError()
-    return token
+    return remainder.strip()
 
 
 async def authenticate_tenant_request(

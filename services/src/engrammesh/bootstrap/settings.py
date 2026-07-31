@@ -149,7 +149,7 @@ class OidcSettings(_FrozenSettingsModel):
     audience: str | None = None
     actor_claim: str = "sub"
     tenant_claim: str = "tenant_id"
-    dev_signing_key: str | None = None
+    dev_signing_key: SecretStr | None = None
 
 
 class AppSettings(BaseSettings):

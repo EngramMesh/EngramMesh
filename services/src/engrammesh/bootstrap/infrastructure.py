@@ -118,7 +118,7 @@ def create_token_verifier(settings: AppSettings) -> TokenVerifierPort | None:
     ):
         return StaticDevTokenVerifier(
             issuer=oidc.issuer or "https://dev.engrammesh.test",
-            signing_key=oidc.dev_signing_key,
+            signing_key=oidc.dev_signing_key.get_secret_value(),
             actor_claim=oidc.actor_claim,
             tenant_claim=oidc.tenant_claim,
             audience=oidc.audience,

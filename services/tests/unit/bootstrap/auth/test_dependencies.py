@@ -55,7 +55,7 @@ def test_parse_bearer_token_requires_authorization_header(
 
 @pytest.mark.parametrize(
     "authorization",
-    ["Basic abc", "Bearer", "Bearer ", "bearer token", "Token abc"],
+    ["Basic abc", "Bearer", "Bearer ", "Token abc"],
 )
 def test_parse_bearer_token_rejects_malformed_scheme(authorization: str) -> None:
     with pytest.raises(InvalidTokenError):
@@ -65,6 +65,11 @@ def test_parse_bearer_token_rejects_malformed_scheme(authorization: str) -> None
 def test_parse_bearer_token_extracts_jwt() -> None:
     token = "eyJhbGciOiJIUzI1NiJ9.payload.signature"
     assert parse_bearer_token(f"Bearer {token}") == token
+
+
+def test_parse_bearer_token_accepts_lowercase_bearer_scheme() -> None:
+    token = "eyJhbGciOiJIUzI1NiJ9.payload.signature"
+    assert parse_bearer_token(f"bearer {token}") == token
 
 
 @pytest.mark.asyncio
