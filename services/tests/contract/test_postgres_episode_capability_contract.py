@@ -11,7 +11,7 @@ from memory_adapter_contract import (
     MemoryAdapterContractAssertion,
     MemoryAdapterHarnessFactory,
     assert_claim_operations_are_unavailable,
-    assert_non_none_cursor_is_rejected,
+    assert_cursor_pagination_is_stable,
 )
 from test_postgres_memory_adapter_contract import PostgresMemoryAdapterHarness
 
@@ -26,7 +26,7 @@ POSTGRES_EPISODE_CAPABILITY_CONTRACTS: tuple[
     ...,
 ] = (
     ("claims_unavailable", assert_claim_operations_are_unavailable),
-    ("cursor_rejection", assert_non_none_cursor_is_rejected),
+    ("cursor_pagination", assert_cursor_pagination_is_stable),
 )
 
 

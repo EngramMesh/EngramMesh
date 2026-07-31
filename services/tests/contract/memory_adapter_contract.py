@@ -16,6 +16,7 @@ from uuid import UUID
 
 import pytest
 
+from engrammesh.modules.memory.domain.episode_cursor import encode_episode_cursor
 from engrammesh.modules.memory.domain.errors import EpisodeIdempotencyConflict
 from engrammesh.modules.memory.domain.model import (
     Episode,
@@ -581,14 +582,27 @@ async def assert_claim_operations_are_unavailable(
             await unit_of_work.claims.history(make_scope(), memory_id(1))
 
 
-async def assert_non_none_cursor_is_rejected(
+async def assert_cursor_pagination_is_stable(
     make_harness: MemoryAdapterHarnessFactory,
 ) -> None:
     harness = make_harness()
-
+    scope = make_scope()
     async with harness.unit_of_work_factory.create() as unit_of_work:
-        with pytest.raises(ValueError):
-            await unit_of_work.episodes.stream(make_scope(), cursor="next")
+        for index in range(3):
+            await unit_of_work.episodes.append(make_episode(index))
+        await unit_of_work.commit()
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        page_one = await unit_of_work.episodes.stream(scope, limit=2)
+        assert len(page_one) == 2
+        cursor = encode_episode_cursor(
+            ingested_at=page_one[-1].ingested_at,
+            episode_id=page_one[-1].id,
+        )
+        page_two = await unit_of_work.episodes.stream(
+            scope, limit=2, cursor=cursor
+        )
+        assert len(page_two) == 1
+        assert page_one[0].id != page_two[0].id
 
 
 async def assert_cancellation_while_queued_releases_lock(
@@ -776,7 +790,7 @@ IN_MEMORY_CAPABILITY_CONTRACTS: tuple[
     ...,
 ] = (
     ("claims_unavailable", assert_claim_operations_are_unavailable),
-    ("cursor_rejection", assert_non_none_cursor_is_rejected),
+    ("cursor_pagination", assert_cursor_pagination_is_stable),
     (
         "cancel_while_queued",
         assert_cancellation_while_queued_releases_lock,
