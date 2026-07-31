@@ -11,6 +11,9 @@ from engrammesh.modules.runtime.adapters.temporal.mappers import (
     snapshot_to_payload,
     spec_to_payload,
 )
+from engrammesh.modules.runtime.adapters.temporal.orchestrator import (
+    TemporalOrchestratorPort,
+)
 from engrammesh.modules.runtime.adapters.temporal.workflows import (
     ExecutionLifecycleWorkflow,
     workflow_id,
@@ -18,6 +21,7 @@ from engrammesh.modules.runtime.adapters.temporal.workflows import (
 
 __all__ = [
     "ExecutionLifecycleWorkflow",
+    "TemporalOrchestratorPort",
     "advance_to_planning",
     "advance_to_running",
     "advance_to_succeeded",

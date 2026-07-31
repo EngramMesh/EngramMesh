@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
+from typing import Any
 
 from temporalio import activity
 
@@ -24,11 +25,11 @@ def _parse_updated_at(updated_at_iso: str) -> datetime:
 
 
 def _advance_status(
-    snapshot_payload: dict[str, object],
+    snapshot_payload: dict[str, Any],
     *,
     target: ExecutionStatus,
     updated_at_iso: str,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     snapshot = payload_to_snapshot(snapshot_payload)
     if not can_transition_execution(snapshot.status, target):
         msg = f"illegal transition from {snapshot.status} to {target}"
@@ -44,9 +45,9 @@ def _advance_status(
 
 @activity.defn
 async def advance_to_planning(
-    snapshot_payload: dict[str, object],
+    snapshot_payload: dict[str, Any],
     updated_at_iso: str,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """Advance execution state from pending to planning."""
     return _advance_status(
         snapshot_payload,
@@ -57,9 +58,9 @@ async def advance_to_planning(
 
 @activity.defn
 async def advance_to_running(
-    snapshot_payload: dict[str, object],
+    snapshot_payload: dict[str, Any],
     updated_at_iso: str,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """Advance execution state from planning to running."""
     return _advance_status(
         snapshot_payload,
@@ -70,9 +71,9 @@ async def advance_to_running(
 
 @activity.defn
 async def advance_to_succeeded(
-    snapshot_payload: dict[str, object],
+    snapshot_payload: dict[str, Any],
     updated_at_iso: str,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """Advance execution state from running to succeeded."""
     return _advance_status(
         snapshot_payload,

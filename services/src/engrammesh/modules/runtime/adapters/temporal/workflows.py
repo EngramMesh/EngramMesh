@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import timedelta
+from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -37,11 +38,11 @@ class ExecutionLifecycleWorkflow:
     """Minimal lifecycle: pending → planning → running → succeeded."""
 
     def __init__(self) -> None:
-        self._snapshot: dict[str, object] = {}
+        self._snapshot: dict[str, Any] = {}
         self._cancel_requested = False
 
     @workflow.run
-    async def run(self, spec_payload: dict[str, object]) -> None:
+    async def run(self, spec_payload: dict[str, Any]) -> None:
         self._snapshot = initial_snapshot_payload(
             spec_payload,
             updated_at=workflow.now(),
@@ -85,7 +86,7 @@ class ExecutionLifecycleWorkflow:
         self._cancel_requested = True
 
     @workflow.query
-    def current_snapshot(self) -> dict[str, object]:
+    def current_snapshot(self) -> dict[str, Any]:
         return self._snapshot
 
     def _apply_cancel(self) -> None:
