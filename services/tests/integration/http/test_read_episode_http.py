@@ -81,6 +81,7 @@ async def test_get_wrong_subject_returns_404(client: httpx.AsyncClient) -> None:
         },
     )
     assert response.status_code == 404
+    assert response.json()["error"]["code"] == "episode_not_found"
 
 
 @pytest.mark.asyncio
@@ -122,6 +123,9 @@ async def test_list_with_cursor_returns_remaining(client: httpx.AsyncClient) -> 
         },
     )
     assert second.status_code == 200
+    first_ids = {item["episode_id"] for item in first.json()["items"]}
+    second_ids = {item["episode_id"] for item in second.json()["items"]}
+    assert first_ids.isdisjoint(second_ids)
     assert len(second.json()["items"]) == 1
     assert second.json()["next_cursor"] is None
 

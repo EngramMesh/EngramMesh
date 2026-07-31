@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Never
 from uuid import UUID
 
 import pytest
@@ -38,6 +39,12 @@ EPISODE_IDS = (
     MemoryId(UUID("a40ddfba-f834-486b-b918-bbb87a6bf9db")),
 )
 BASE_INGESTED_AT = datetime(2026, 7, 27, 10, 0, tzinfo=UTC)
+
+
+class MustNotBeUsed:
+    def __getattr__(self, name: str) -> Never:
+        msg = f"unexpected dependency access: {name}"
+        raise AssertionError(msg)
 
 
 @dataclass
@@ -137,12 +144,11 @@ def test_list_rejects_limit_over_100() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_unauthorized_raises() -> None:
+async def test_list_denial_authorizes_first_and_accesses_nothing_else() -> None:
     authorization = RecordingAuthorization(allowed=False)
-    factory = InMemoryMemoryUnitOfWorkFactory(InMemoryMemoryDatabase())
     handler = ListEpisodesHandler(
         authorization=authorization,
-        unit_of_work_factory=factory,
+        unit_of_work_factory=MustNotBeUsed(),
     )
     with pytest.raises(EpisodeReadAuthorizationDenied):
         await handler.handle(
