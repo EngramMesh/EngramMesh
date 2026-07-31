@@ -444,6 +444,8 @@ from engrammesh.bootstrap.http.app import create_app
 | `GET` | `/health` | `200` | Liveness probe; does not touch the database |
 | `GET` | `/ready` | `200` or `503` | Readiness probe; checks runtime startup, memory enablement, and PostgreSQL |
 | `POST` | `/v1/tenants/{tenant_id}/episodes` | `201` or `200` | Record one Episode; `201` when created, `200` on exact idempotent replay |
+| `GET` | `/v1/tenants/{tenant_id}/episodes/{episode_id}` | `200` / `403` / `404` / `422` / `503` | Read one episode by exact scope |
+| `GET` | `/v1/tenants/{tenant_id}/episodes` | `200` / `403` / `422` / `503` | List episodes with keyset cursor pagination |
 
 `POST` accepts optional header `X-Correlation-Id` (UUID). When omitted, the
 server generates a new correlation ID. Non-UUID values return **422**.
@@ -569,6 +571,81 @@ Repeat the same request to observe an idempotent replay (`200`):
 ```json
 { "episode_id": "<same-uuid>", "created": false }
 ```
+
+## Episode read HTTP API
+
+`bootstrap/http/` exposes scope-accurate episode reads through
+`AppRuntime.get_episode_handler()` and `AppRuntime.list_episodes_handler()`.
+Read handlers use `read_episode` authorization via `EnvironmentGatedMemoryAuthorization`
+(same environment gate as ingest: `development` and `test` allowed).
+
+### Read query parameters
+
+Both read endpoints require query parameters:
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `subject_id` | yes | UUID subject within the tenant scope |
+| `workspace_id` | no | Optional workspace narrowing |
+| `agent_id` | no | Optional agent narrowing |
+| `actor_id` | yes | Authorization principal (until OIDC slice) |
+
+List additionally accepts:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `limit` | `50` | Page size; min `1`, max `100` |
+| `cursor` | omitted | Opaque cursor from prior `next_cursor`; omit on first page |
+
+### Read success responses
+
+| Endpoint | Status | Body |
+|----------|--------|------|
+| `GET .../episodes/{episode_id}` | `200` | Full `EpisodeResponse` (see `episode-response.schema.json`) |
+| `GET .../episodes` | `200` | `{ "items": [ /* EpisodeResponse */ ], "next_cursor": "..." \| null }` |
+
+`EpisodeResponse` includes `episode_id`, `scope` (with `tenant_id`), `actor_id`,
+`source_type`, `content_ref`, `observed_at`, `ingested_at`, `content_hash`,
+`idempotency_key`, `sensitivity`, `retention_class`, and `consent_basis`.
+`content_ref` is opaque; object storage hydration is not implemented.
+
+### Read error responses
+
+Read errors reuse the canonical envelope. Additional codes beyond ingest:
+
+| Status | `error.code` | Condition |
+|--------|--------------|-----------|
+| `403` | `episode_read_authorization_denied` | `EpisodeReadAuthorizationDenied` (including `staging` / `production`) |
+| `404` | `episode_not_found` | Unknown id, wrong scope, or cross-tenant access (no existence leak) |
+| `422` | `invalid_episode_cursor` | Malformed list cursor |
+| `422` | `validation_error` | Invalid UUIDs, `limit` out of range (`1`–`100`) |
+| `503` | `service_unavailable` | `ConfigurationError` (for example `memory_disabled`) |
+
+Wrong tenant, wrong `subject_id`, wrong optional scope narrowing, or unknown
+`episode_id` all return **404** `episode_not_found`. Never **403** for cross-tenant
+existence leaks.
+
+### Example `curl` (record → get → list)
+
+Record an episode (same as ingest example), then read it back:
+
+```bash
+EPISODE_ID="<uuid-from-post-response>"
+
+curl -sS "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/episodes/${EPISODE_ID}" \
+  "?subject_id=3d65c071-ac55-4847-a8f1-e3cb859d3c45" \
+  "&workspace_id=workspace-42" \
+  "&actor_id=3ba213e4-3367-4e7c-9635-bcbfbad505e6"
+
+curl -sS "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/episodes" \
+  "?subject_id=3d65c071-ac55-4847-a8f1-e3cb859d3c45" \
+  "&workspace_id=workspace-42" \
+  "&actor_id=3ba213e4-3367-4e7c-9635-bcbfbad505e6" \
+  "&limit=50"
+```
+
+List pagination: when `next_cursor` is non-null, pass it as the `cursor` query
+parameter on the next request with the same scope and `limit`.
 
 ## Run the example
 
@@ -712,8 +789,8 @@ orchestration is tested separately. `IN_MEMORY_CAPABILITY_CONTRACTS` and
 unavailable Claims, rejected cursors, and synchronization model.
 
 Follow-up work for production PostgreSQL includes row-level security policies
-and broader memory surfaces beyond Episode ingest. HTTP follow-up includes OIDC,
-read APIs, and production observability. New shared capability behavior requires
+and broader memory surfaces beyond Episode ingest. HTTP follow-up includes OIDC
+and production observability. New shared capability behavior requires
 a separately reviewed contract profile rather than edits to the portable Episode
 assertion bodies.
 

@@ -302,6 +302,8 @@ from engrammesh.bootstrap.http.app import create_app
 | `GET` | `/health` | `200` | 存活探针；不访问数据库 |
 | `GET` | `/ready` | `200` 或 `503` | 就绪探针；检查运行时启动、memory 启用与 PostgreSQL |
 | `POST` | `/v1/tenants/{tenant_id}/episodes` | `201` 或 `200` | 记录一条 Episode；新建为 `201`，精确幂等重放为 `200` |
+| `GET` | `/v1/tenants/{tenant_id}/episodes/{episode_id}` | `200` / `403` / `404` / `422` / `503` | 按精确 scope 读取单条 Episode |
+| `GET` | `/v1/tenants/{tenant_id}/episodes` | `200` / `403` / `422` / `503` | 列出 Episode（keyset 游标分页） |
 
 `POST` 接受可选请求头 `X-Correlation-Id`（UUID）。缺省时服务端生成新 correlation ID；非 UUID 格式返回 **422**。
 
@@ -419,6 +421,79 @@ curl -sS -X POST "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-37945
 ```json
 { "episode_id": "<相同-uuid>", "created": false }
 ```
+
+## Episode 读取 HTTP API
+
+`bootstrap/http/` 通过 `AppRuntime.get_episode_handler()` 与
+`AppRuntime.list_episodes_handler()` 暴露按 scope 精确读取 Episode 的能力。
+读取处理器使用 `read_episode` 授权（`EnvironmentGatedMemoryAuthorization`，与摄取相同：
+`development` 与 `test` 允许）。
+
+### 读取查询参数
+
+两个读取端点均需查询参数：
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `subject_id` | 是 | 租户 scope 内的 subject UUID |
+| `workspace_id` | 否 | 可选 workspace 收窄 |
+| `agent_id` | 否 | 可选 agent 收窄 |
+| `actor_id` | 是 | 授权主体（OIDC 切片前由查询参数提供） |
+
+列表端点额外接受：
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `limit` | `50` | 页大小；最小 `1`，最大 `100` |
+| `cursor` | 省略 | 上一页 `next_cursor` 返回的不透明游标；首页省略 |
+
+### 读取成功响应
+
+| 端点 | 状态码 | 响应体 |
+|------|--------|--------|
+| `GET .../episodes/{episode_id}` | `200` | 完整 `EpisodeResponse`（见 `episode-response.schema.json`） |
+| `GET .../episodes` | `200` | `{ "items": [ /* EpisodeResponse */ ], "next_cursor": "..." \| null }` |
+
+`EpisodeResponse` 包含 `episode_id`、`scope`（含 `tenant_id`）、`actor_id`、
+`source_type`、`content_ref`、`observed_at`、`ingested_at`、`content_hash`、
+`idempotency_key`、`sensitivity`、`retention_class`、`consent_basis`。
+`content_ref` 为不透明引用；对象存储内容解析尚未实现。
+
+### 读取错误响应
+
+读取错误复用统一信封。摄取之外新增：
+
+| 状态码 | `error.code` | 触发条件 |
+|--------|--------------|----------|
+| `403` | `episode_read_authorization_denied` | `EpisodeReadAuthorizationDenied`（含 `staging` / `production`） |
+| `404` | `episode_not_found` | 未知 id、scope 不匹配或跨租户访问（不泄漏存在性） |
+| `422` | `invalid_episode_cursor` | 列表游标格式非法 |
+| `422` | `validation_error` | UUID 非法、`limit` 超出范围（`1`–`100`） |
+| `503` | `service_unavailable` | `ConfigurationError`（如 `memory_disabled`） |
+
+错误租户、错误 `subject_id`、错误可选 scope 收窄或未知 `episode_id` 均返回 **404**
+`episode_not_found`。跨租户存在性不得返回 **403**。
+
+### `curl` 示例（记录 → 读取 → 列表）
+
+先记录 Episode（同摄取示例），再读回：
+
+```bash
+EPISODE_ID="<post-响应中的-uuid>"
+
+curl -sS "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/episodes/${EPISODE_ID}" \
+  "?subject_id=3d65c071-ac55-4847-a8f1-e3cb859d3c45" \
+  "&workspace_id=workspace-42" \
+  "&actor_id=3ba213e4-3367-4e7c-9635-bcbfbad505e6"
+
+curl -sS "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/episodes" \
+  "?subject_id=3d65c071-ac55-4847-a8f1-e3cb859d3c45" \
+  "&workspace_id=workspace-42" \
+  "&actor_id=3ba213e4-3367-4e7c-9635-bcbfbad505e6" \
+  "&limit=50"
+```
+
+当 `next_cursor` 非空时，在下一请求中以 `cursor` 查询参数传入，并保持相同 scope 与 `limit`。
 
 ## 运行示例
 
@@ -549,6 +624,6 @@ ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engr
 
 PostgreSQL Episode Adapter 已通过其类型化 Harness 绑定 `tests/contract/memory_adapter_contract.py` 中 `EPISODE_ADAPTER_CONTRACTS` 的每个断言，且未修改可复用断言主体。核心 Registry 不假定单一全局锁，也不要求 Claim 操作或游标不可用。可复用断言模块只导入公共记忆 Port、领域值与共享契约；应用编排由其他测试单独验证。`IN_MEMORY_CAPABILITY_CONTRACTS` 与 `POSTGRES_EPISODE_CAPABILITY_CONTRACTS` 分别描述各 Adapter 的不可用 Claim、拒绝游标与同步模型。
 
-生产 PostgreSQL 的后续工作包括行级安全（RLS）策略，以及 Episode 摄取之外的更广泛记忆表面。HTTP 后续工作包括 OIDC、读取 API 与生产可观测性。新增共享能力行为需要单独评审的契约 Profile，而不是修改可移植 Episode 断言主体。
+生产 PostgreSQL 的后续工作包括行级安全（RLS）策略，以及 Episode 摄取之外的更广泛记忆表面。HTTP 后续工作包括 OIDC 与生产可观测性。新增共享能力行为需要单独评审的契约 Profile，而不是修改可移植 Episode 断言主体。
 
 经过单独设计评审后，后续阶段可增加 Temporal Adapter、API、Worker 与外部事件分发。它们必须保留上述依赖与权威边界；本指南不预先授权任何供应商或可部署产品功能。
