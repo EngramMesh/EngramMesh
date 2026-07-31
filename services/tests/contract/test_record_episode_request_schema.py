@@ -110,7 +110,7 @@ def test_request_schema_is_valid_draft_2020_12_with_explicit_metadata() -> None:
 
     Draft202012Validator.check_schema(schema)
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
-    assert schema["version"] == "1.0.0"
+    assert schema["version"] == "1.1.0"
     assert schema["$id"] == (
         "https://engrammesh.org/contracts/memory/v1/record-episode-request.schema.json"
     )
@@ -123,13 +123,22 @@ def test_request_schema_accepts_a_representative_valid_body() -> None:
     _validator().validate(valid_request_body())
 
 
+def test_record_episode_request_without_actor_id_is_valid_v1_1() -> None:
+    body = valid_request_body()
+    del body["actor_id"]
+    _validator().validate(body)
+
+
+def test_record_episode_request_with_actor_id_still_valid() -> None:
+    _validator().validate(valid_request_body())
+
+
 @pytest.mark.parametrize(
     "missing_path",
     [
         ("scope",),
         ("scope", "tenant_id"),
         ("scope", "subject_id"),
-        ("actor_id",),
         ("source_type",),
         ("content_ref",),
         ("observed_at",),
