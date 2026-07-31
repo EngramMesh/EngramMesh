@@ -45,7 +45,7 @@ See spec §8.
 ```text
 ① Inbox consumer + episode-recorded processor   ✅
 ② Episode read API                               ✅
-③ OIDC tenant context                            ← this slice
+③ OIDC tenant context                            ✅
 ④ Temporal runtime adapter
 ⑤ Claim extraction processor (Phase 2 entry)
 ```
