@@ -219,6 +219,7 @@ PROTOCOL_SIGNATURES = {
         (
             ("self", EMPTY, EMPTY),
             ("scope", MemoryScope, EMPTY),
+            ("limit", int | None, None),
             ("cursor", str | None, None),
         ),
         tuple[Episode, ...],
@@ -462,7 +463,8 @@ def test_protocol_methods_have_exact_signatures(
                 OutboxRelayStore.mark_published,
                 InboxStore.try_record,
                 InboxStore.remove_record,
-            )
+                EpisodeStore.stream,
+            ) and not (method == EpisodeStore.stream and name == "scope")
             else PARAMETER,
         )
         for name, annotation, default in expected_parameters

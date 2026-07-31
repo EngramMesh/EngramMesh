@@ -107,6 +107,8 @@ class EpisodeStore(Protocol):
     async def stream(
         self,
         scope: MemoryScope,
+        *,
+        limit: int | None = None,
         cursor: str | None = None,
     ) -> tuple[Episode, ...]: ...
 
