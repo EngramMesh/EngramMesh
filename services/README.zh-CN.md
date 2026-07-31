@@ -4,9 +4,9 @@
 
 ## 目的与明确的非目标
 
-本目录包含经过测试的 EngramMesh Python 3.14 服务架构脚手架，以及一个经过测试的 Episode 摄取应用切片。它定义了不可变的共享标识符与事件元数据、记忆模块和持久化运行时的公共契约、依赖规则、类型化进程配置、从设置装配 PostgreSQL Handler 的组合根、带版本的 JSON Schema 事件契约，以及仅用于测试与开发的事务型内存 Adapter。
+本目录包含经过测试的 EngramMesh Python 3.14 服务架构脚手架，以及一个经过测试的 Episode 摄取应用切片和一个经过测试的持久化执行运行时切片。它定义了不可变的共享标识符与事件元数据、记忆模块和持久化运行时的公共契约、依赖规则、类型化进程配置、从设置装配 PostgreSQL 记忆 Handler 与运行时编排的组合根、带版本的 JSON Schema 事件契约，以及仅用于测试与开发的事务型内存 Adapter。
 
-它**不**包含 Worker 进程或外部事件分发器、依赖注入框架、生产 Temporal 客户端、模型或工具集成、投影流水线或可部署产品功能。最小 HTTP 控制 API 已暴露 Episode 摄取、Episode 读取、健康探针，以及可选的 OIDC Bearer JWT 鉴权；生产加固仍属后续工作。内存 Adapter 仅在单个进程内保存状态，并不持久化。测试通过只能证明本文所述应用契约与架构契约成立，并不表示已经存在可部署的运行时。
+它**不**包含执行 HTTP API、PostgreSQL 执行快照存储、外部事件分发器、依赖注入框架、模型或工具集成、投影流水线或可部署产品功能。最小 HTTP 控制 API 已暴露 Episode 摄取、Episode 读取、健康探针，以及可选的 OIDC Bearer JWT 鉴权；生产加固仍属后续工作。内存 Adapter 仅在单个进程内保存状态，并不持久化。当 `temporal.enabled=true` 时，独立的 Temporal Worker 入口用于持久化工作流执行。测试通过只能证明本文所述应用契约与架构契约成立，并不表示已经存在可部署的运行时。
 
 ## 模块树
 
@@ -18,7 +18,8 @@ services/
 │   │   ├── http/             # FastAPI 控制 API（Episode 摄取、探针）
 │   │   ├── infrastructure.py # 默认时钟、标识符与授权 Port
 │   │   ├── server.py         # uvicorn 入口
-│   │   └── settings.py       # 类型化、不可变的配置边界
+│   │   ├── settings.py       # 类型化、不可变的配置边界
+│   │   └── worker.py         # Temporal Worker 入口
 │   ├── modules/
 │   │   ├── memory/
 │   │   │   ├── adapters/     # 内存与 PostgreSQL 事务 Adapter
@@ -29,6 +30,10 @@ services/
 │   │   │   ├── ports.py      # 与实现无关的边界
 │   │   │   └── public.py     # 跨模块公共契约
 │   │   └── runtime/
+│   │       ├── adapters/     # 内存与 Temporal 编排 Adapter
+│   │       │   ├── in_memory/  # ExecutionIndex + InMemoryOrchestratorPort
+│   │       │   └── temporal/   # TemporalOrchestratorPort、工作流、活动
+│   │       ├── application/  # 与框架无关的执行编排
 │   │       ├── domain/       # 纯持久化执行值对象与状态转换
 │   │       ├── ports.py      # 与实现无关的边界
 │   │       └── public.py     # 跨模块公共契约
@@ -202,6 +207,109 @@ PY
 ```
 
 当 `modules.memory_enabled` 为 `False` 时，`record_episode_handler()` 抛出 code 为 `memory_disabled` 的 `ConfigurationError`。当 memory 已启用但 `startup()` 尚未完成时，抛出消息为 `application runtime is not started` 的 `RuntimeError`。
+
+## 运行时执行切片
+
+运行时模块通过 `AppRuntime` 装配的三个应用 Handler 提供持久化多 Agent 执行编排：
+
+| Handler | 命令 / 查询 | 动作 |
+|---------|------------|------|
+| `StartExecutionHandler` | `StartExecutionCommand` | 授权 + 启动执行 |
+| `GetExecutionSnapshotHandler` | `GetExecutionSnapshotQuery` | 授权 + 读取快照 |
+| `CancelExecutionHandler` | `CancelExecutionCommand` | 授权 + 取消执行 |
+
+访问器：`start_execution_handler()`、`get_execution_snapshot_handler()`、
+`cancel_execution_handler()`。当 `modules.runtime_enabled` 为 `False` 时，均抛出
+code 为 `runtime_disabled` 的 `ConfigurationError`。
+
+### ExecutionIndex 与工作流标识
+
+`AppRuntime` 在进程生命周期内拥有**单例** `InMemoryRuntimeDatabase`（别名
+`ExecutionIndex`）。索引映射 `(tenant_id, idempotency_key) → execution_id`，
+并在内存编排器激活时存储完整快照。
+
+**工作流 ID 方案：** `{tenant_id}:{execution_id}`。`InMemoryOrchestratorPort`
+与 `TemporalOrchestratorPort` 均使用该格式。`get_snapshot` 通过租户与执行 id
+解析工作流，无需反向索引。启动幂等性在 `start_workflow` 之前使用
+`ExecutionIndex`；重放时描述已有工作流而非创建新工作流。
+
+`StartExecutionHandler` 通过比较返回快照的 `execution_id` 与新生成的 id 推断
+`created`：首次调用 → `created=True`；精确幂等重放返回已存储 id →
+`created=False`。
+
+### 启用矩阵
+
+| `runtime_enabled` | `temporal.enabled` | 编排器 | 说明 |
+|-------------------|-------------------|--------|------|
+| `false` | 任意 | 无 | Handler 抛出 `runtime_disabled` |
+| `true` | `false` | `InMemoryOrchestratorPort` | 默认；CI 与本地开发 |
+| `true` | `true` | `TemporalOrchestratorPort` | 需要运行 Temporal Worker |
+
+Memory 与 Runtime 启动相互独立；memory 禁用时仍可使用运行时 Handler。
+
+### 内存 vs Temporal
+
+| 关注点 | `temporal.enabled=false` | `temporal.enabled=true` |
+|--------|--------------------------|-------------------------|
+| 快照权威 | `ExecutionIndex`（进程内） | Temporal 工作流查询 `current_snapshot` |
+| 持久性 | 无（进程内） | Temporal Event History |
+| Worker | 不需要 | `bootstrap/worker.py` 在配置的任务队列上运行 |
+| SDK 边界 | 不适用 | `temporalio` 仅限 `adapters/temporal/` 与 `worker.py` |
+
+`InMemoryOrchestratorPort` 实现完整 `OrchestratorPort` 契约，包括幂等指纹、
+租户作用域读取与取消状态转换。`TemporalOrchestratorPort` 共享同一
+`ExecutionIndex` 处理启动幂等，并将生命周期委托给 `ExecutionLifecycleWorkflow`
+及桩活动（`advance_to_planning`、`advance_to_running`、`advance_to_succeeded`）。
+SDK 错误包装为 `OrchestrationUnavailable`。
+
+可移植编排器断言位于 `ORCHESTRATOR_PORT_CONTRACTS`
+（`tests/contract/orchestrator_adapter_contract.py`）；内存 Adapter 率先绑定。
+
+### 启动 Temporal Worker
+
+Worker 与 HTTP 服务分离运行。需要 `temporal.enabled=true` 且 Temporal 服务可达：
+
+```bash
+export ENGRAMMESH__TEMPORAL__ENABLED=true
+export ENGRAMMESH__TEMPORAL__NAMESPACE=demo
+export ENGRAMMESH__TEMPORAL__TASK_QUEUE=demo
+uv run --python 3.14 --project services \
+  python -m engrammesh.bootstrap.worker
+```
+
+`worker.py` 在配置的任务队列上注册 `ExecutionLifecycleWorkflow` 与桩活动，
+并在 `SIGINT`/`SIGTERM` 时优雅关闭。
+
+### Temporal 测试
+
+默认 pytest 排除带 `temporal` 标记的测试：
+
+```toml
+# services/pyproject.toml
+addopts = "-m 'not temporal'"
+```
+
+显式运行 Temporal 集成测试：
+
+```bash
+uv run --python 3.14 --project services pytest services/tests -m temporal -q
+```
+
+Temporal 测试使用 `WorkflowEnvironment` 时间跳过，验证工作流完成、启动幂等重放、
+取消与 Worker 重启恢复。
+
+### 运行时非目标
+
+本切片明确不包含：
+
+- 执行 HTTP API（Slice 3 — 后续 ④a）
+- PostgreSQL 执行快照存储与运行时 Outbox 事件（Slice 4 — 后续 ④b）
+- LangGraph、PlannerPort、AgentEnginePort、完整 Plan DAG 执行
+- Claim 提取（Phase 2）
+- OIDC 运行时授权（推迟至执行 HTTP 工作）
+
+详见 `docs/rfcs/2026-07-31-temporal-runtime-adapter.md` 与
+`docs/superpowers/specs/2026-07-31-temporal-runtime-adapter-design.md`。
 
 ## Outbox Relay
 

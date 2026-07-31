@@ -5,20 +5,23 @@
 ## Purpose and exact non-goals
 
 This directory contains the tested Python 3.14 architecture scaffold for
-EngramMesh services and one tested Episode ingest application slice. It defines
-immutable shared identifiers and event metadata, public memory and
-durable-runtime contracts, dependency rules, typed process configuration, a
-composition root that wires PostgreSQL-backed handlers from settings, versioned
-JSON Schema event contracts, and a transactional in-memory adapter for test and
-development use.
+EngramMesh services, one tested Episode ingest application slice, and one
+tested durable-execution runtime slice. It defines immutable shared identifiers
+and event metadata, public memory and durable-runtime contracts, dependency
+rules, typed process configuration, a composition root that wires
+PostgreSQL-backed memory handlers and runtime orchestration from settings,
+versioned JSON Schema event contracts, and transactional in-memory adapters for
+test and development use.
 
-It does **not** contain a worker process or external event dispatcher, a
-dependency-injection framework, production Temporal client, model or tool
-integration, projection pipeline, or deployable product feature. A minimal HTTP control API exposes Episode ingest, episode read, health probes,
-and optional OIDC Bearer JWT authentication; production hardening remains
-follow-up work. The in-memory adapter is process-local and non-durable. Passing tests
-prove the documented application and architecture contracts; they do not imply
-that a deployable runtime exists.
+It does **not** contain an execution HTTP API, a PostgreSQL execution snapshot
+store, external event dispatcher, dependency-injection framework, model or tool
+integration, projection pipeline, or deployable product feature. A minimal HTTP
+control API exposes Episode ingest, episode read, health probes, and optional
+OIDC Bearer JWT authentication; production hardening remains follow-up work.
+The in-memory adapters are process-local and non-durable. A separate Temporal
+worker entry point exists for durable workflow execution when
+`temporal.enabled=true`. Passing tests prove the documented application and
+architecture contracts; they do not imply that a deployable runtime exists.
 
 ## Module tree
 
@@ -30,7 +33,8 @@ services/
 │   │   ├── http/             # FastAPI control API (episode ingest, probes)
 │   │   ├── infrastructure.py # default clock, identity, and authorization ports
 │   │   ├── server.py         # uvicorn entry point
-│   │   └── settings.py       # typed, immutable configuration boundary
+│   │   ├── settings.py       # typed, immutable configuration boundary
+│   │   └── worker.py         # Temporal worker entry point
 │   ├── modules/
 │   │   ├── memory/
 │   │   │   ├── adapters/     # in-memory and PostgreSQL transaction adapters
@@ -41,6 +45,10 @@ services/
 │   │   │   ├── ports.py      # implementation-neutral boundaries
 │   │   │   └── public.py     # cross-module public contract
 │   │   └── runtime/
+│   │       ├── adapters/     # in-memory and Temporal orchestrator adapters
+│   │       │   ├── in_memory/  # ExecutionIndex + InMemoryOrchestratorPort
+│   │       │   └── temporal/   # TemporalOrchestratorPort, workflow, activities
+│   │       ├── application/  # framework-neutral execution orchestration
 │   │       ├── domain/       # pure durable-execution values and transitions
 │   │       ├── ports.py      # implementation-neutral boundaries
 │   │       └── public.py     # cross-module public contract
@@ -293,6 +301,116 @@ PY
 `memory_disabled` when `modules.memory_enabled` is `False`. It raises
 `RuntimeError` with message `application runtime is not started` when memory is
 enabled but `startup()` has not completed.
+
+## Runtime execution slice
+
+The runtime module provides durable multi-agent execution orchestration through
+three application handlers wired by `AppRuntime`:
+
+| Handler | Command / query | Action |
+|---------|-----------------|--------|
+| `StartExecutionHandler` | `StartExecutionCommand` | Authorize + start execution |
+| `GetExecutionSnapshotHandler` | `GetExecutionSnapshotQuery` | Authorize + read snapshot |
+| `CancelExecutionHandler` | `CancelExecutionCommand` | Authorize + cancel execution |
+
+Accessors: `start_execution_handler()`, `get_execution_snapshot_handler()`,
+`cancel_execution_handler()`. When `modules.runtime_enabled` is `False`, each
+raises `ConfigurationError` with code `runtime_disabled`.
+
+### ExecutionIndex and workflow identity
+
+`AppRuntime` owns a **singleton** `InMemoryRuntimeDatabase` (alias
+`ExecutionIndex`) for the process lifetime. The index maps
+`(tenant_id, idempotency_key) → execution_id` and stores full snapshots when the
+in-memory orchestrator is active.
+
+**Workflow ID scheme:** `{tenant_id}:{execution_id}`. Both
+`InMemoryOrchestratorPort` and `TemporalOrchestratorPort` use this format.
+`get_snapshot` resolves workflows by tenant and execution id without a reverse
+index. Start idempotency uses `ExecutionIndex` before `start_workflow`; replay
+describes the existing workflow instead of creating a new one.
+
+`StartExecutionHandler` infers `created` by comparing the returned snapshot's
+`execution_id` to the newly generated id: first call → `created=True`; exact
+idempotent replay returns the stored id → `created=False`.
+
+### Enablement matrix
+
+| `runtime_enabled` | `temporal.enabled` | Orchestrator | Notes |
+|-------------------|-------------------|--------------|-------|
+| `false` | any | none | Handlers raise `runtime_disabled` |
+| `true` | `false` | `InMemoryOrchestratorPort` | Default; CI and local dev |
+| `true` | `true` | `TemporalOrchestratorPort` | Requires running Temporal worker |
+
+Memory and runtime startup are independent; runtime handlers can be used when
+memory is disabled.
+
+### In-memory vs Temporal
+
+| Concern | `temporal.enabled=false` | `temporal.enabled=true` |
+|---------|--------------------------|-------------------------|
+| Snapshot authority | `ExecutionIndex` (process-local) | Temporal workflow query `current_snapshot` |
+| Durability | None (process-local) | Temporal Event History |
+| Worker | Not required | `bootstrap/worker.py` on configured task queue |
+| SDK boundary | N/A | `temporalio` only in `adapters/temporal/` and `worker.py` |
+
+`InMemoryOrchestratorPort` implements the full `OrchestratorPort` contract
+including idempotency fingerprints, tenant-scoped reads, and cancel state
+transitions. `TemporalOrchestratorPort` shares the same `ExecutionIndex` for
+start idempotency and delegates lifecycle to `ExecutionLifecycleWorkflow` with
+stub activities (`advance_to_planning`, `advance_to_running`,
+`advance_to_succeeded`). SDK errors wrap as `OrchestrationUnavailable`.
+
+Portable orchestrator assertions live in `ORCHESTRATOR_PORT_CONTRACTS`
+(`tests/contract/orchestrator_adapter_contract.py`); the in-memory adapter
+binds first.
+
+### Start the Temporal worker
+
+The worker runs separately from the HTTP server. It requires
+`temporal.enabled=true` and a reachable Temporal server:
+
+```bash
+export ENGRAMMESH__TEMPORAL__ENABLED=true
+export ENGRAMMESH__TEMPORAL__NAMESPACE=demo
+export ENGRAMMESH__TEMPORAL__TASK_QUEUE=demo
+uv run --python 3.14 --project services \
+  python -m engrammesh.bootstrap.worker
+```
+
+`worker.py` registers `ExecutionLifecycleWorkflow` and stub activities on the
+configured task queue and shuts down gracefully on `SIGINT`/`SIGTERM`.
+
+### Temporal tests
+
+Default pytest excludes temporal-marked tests:
+
+```toml
+# services/pyproject.toml
+addopts = "-m 'not temporal'"
+```
+
+Run temporal integration tests explicitly:
+
+```bash
+uv run --python 3.14 --project services pytest services/tests -m temporal -q
+```
+
+Temporal tests use `WorkflowEnvironment` time-skipping and prove workflow
+completion, idempotent start replay, cancel, and worker-restart recovery.
+
+### Runtime non-goals
+
+This slice deliberately excludes:
+
+- Execution HTTP API (Slice 3 — follow-up ④a)
+- PostgreSQL execution snapshot store and runtime Outbox events (Slice 4 — follow-up ④b)
+- LangGraph, PlannerPort, AgentEnginePort, full Plan DAG execution
+- Claim extraction (Phase 2)
+- OIDC runtime authorization (deferred to execution HTTP work)
+
+See `docs/rfcs/2026-07-31-temporal-runtime-adapter.md` and
+`docs/superpowers/specs/2026-07-31-temporal-runtime-adapter-design.md`.
 
 ## Outbox Relay
 
