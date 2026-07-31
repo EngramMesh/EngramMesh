@@ -4,19 +4,22 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import FastAPI, Header
+from fastapi import FastAPI, Header, Query
 from starlette.responses import JSONResponse
 from starlette.types import Lifespan
 
 from engrammesh.bootstrap.composition import AppRuntime, ReadinessError
 from engrammesh.bootstrap.http.errors import register_exception_handlers
 from engrammesh.bootstrap.http.mappers import (
+    episode_to_response,
     parse_correlation_id,
     to_command,
+    to_get_episode_query,
+    to_list_episodes_query,
     to_response,
 )
-from engrammesh.bootstrap.http.schemas import RecordEpisodeRequest
-from engrammesh.shared.kernel.ids import TenantId
+from engrammesh.bootstrap.http.schemas import ListEpisodesResponse, RecordEpisodeRequest
+from engrammesh.shared.kernel.ids import AgentInstanceId, MemoryId, SubjectId, TenantId
 
 
 def create_app(
@@ -65,5 +68,53 @@ def create_app(
             status_code=201 if result.created else 200,
             content=response.model_dump(),
         )
+
+    @app.get("/v1/tenants/{tenant_id}/episodes/{episode_id}")
+    async def get_episode(
+        tenant_id: UUID,
+        episode_id: UUID,
+        subject_id: UUID = Query(...),
+        actor_id: UUID = Query(...),
+        workspace_id: str | None = Query(default=None),
+        agent_id: UUID | None = Query(default=None),
+    ) -> JSONResponse:
+        query = to_get_episode_query(
+            path_tenant_id=TenantId(tenant_id),
+            episode_id=MemoryId(episode_id),
+            actor_id=SubjectId(actor_id),
+            subject_id=SubjectId(subject_id),
+            workspace_id=workspace_id,
+            agent_id=AgentInstanceId(agent_id) if agent_id is not None else None,
+        )
+        result = await runtime.get_episode_handler().handle(query)
+        return JSONResponse(
+            content=episode_to_response(result.episode).model_dump(mode="json")
+        )
+
+    @app.get("/v1/tenants/{tenant_id}/episodes")
+    async def list_episodes(
+        tenant_id: UUID,
+        subject_id: UUID = Query(...),
+        actor_id: UUID = Query(...),
+        workspace_id: str | None = Query(default=None),
+        agent_id: UUID | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=100),
+        cursor: str | None = Query(default=None),
+    ) -> JSONResponse:
+        query = to_list_episodes_query(
+            path_tenant_id=TenantId(tenant_id),
+            actor_id=SubjectId(actor_id),
+            subject_id=SubjectId(subject_id),
+            workspace_id=workspace_id,
+            agent_id=AgentInstanceId(agent_id) if agent_id is not None else None,
+            limit=limit,
+            cursor=cursor,
+        )
+        result = await runtime.list_episodes_handler().handle(query)
+        response = ListEpisodesResponse(
+            items=tuple(episode_to_response(item) for item in result.items),
+            next_cursor=result.next_cursor,
+        )
+        return JSONResponse(content=response.model_dump(mode="json"))
 
     return app
