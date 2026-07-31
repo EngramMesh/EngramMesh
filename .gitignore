@@ -17,3 +17,5 @@ docs/plans
 !docs/architecture/
 !docs/adr/
 !docs/rfcs/
+.cursor/
+reports/
