@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from contextvars import Token
 from types import TracebackType
 from typing import final
@@ -14,6 +16,7 @@ from engrammesh.bootstrap.auth.errors import (
     TenantAccessDeniedError,
 )
 from engrammesh.bootstrap.auth.ports import AuthenticatedPrincipal, TokenVerifierPort
+from engrammesh.bootstrap.settings import ConfigurationError
 from engrammesh.shared.kernel.ids import TenantId
 
 _BEARER_PREFIX = "Bearer "
@@ -65,3 +68,29 @@ class PrincipalBinding:
     ) -> None:
         if self._token is not None:
             reset_principal(self._token)
+
+
+@asynccontextmanager
+async def episode_auth_context(
+    *,
+    oidc_enabled: bool,
+    path_tenant_id: UUID,
+    authorization: str | None,
+    verifier: TokenVerifierPort | None,
+) -> AsyncIterator[AuthenticatedPrincipal | None]:
+    """Authenticate episode HTTP requests when OIDC is enabled."""
+    if not oidc_enabled:
+        yield None
+        return
+    if verifier is None:
+        raise ConfigurationError(
+            "oidc_misconfigured",
+            "OIDC verifier is not configured",
+        )
+    principal = await authenticate_tenant_request(
+        path_tenant_id=path_tenant_id,
+        authorization=authorization,
+        verifier=verifier,
+    )
+    with PrincipalBinding(principal):
+        yield principal
