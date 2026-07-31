@@ -6,7 +6,7 @@
 
 本目录包含经过测试的 EngramMesh Python 3.14 服务架构脚手架，以及一个经过测试的 Episode 摄取应用切片。它定义了不可变的共享标识符与事件元数据、记忆模块和持久化运行时的公共契约、依赖规则、类型化进程配置、从设置装配 PostgreSQL Handler 的组合根、带版本的 JSON Schema 事件契约，以及仅用于测试与开发的事务型内存 Adapter。
 
-它**不**包含 Worker 进程或外部事件分发器、依赖注入框架、生产 Temporal 客户端、模型或工具集成、投影流水线或可部署产品功能。最小 HTTP 控制 API 已暴露 Episode 摄取与健康探针；OIDC、读取 API 与生产加固仍属后续工作。内存 Adapter 仅在单个进程内保存状态，并不持久化。测试通过只能证明本文所述应用契约与架构契约成立，并不表示已经存在可部署的运行时。
+它**不**包含 Worker 进程或外部事件分发器、依赖注入框架、生产 Temporal 客户端、模型或工具集成、投影流水线或可部署产品功能。最小 HTTP 控制 API 已暴露 Episode 摄取、Episode 读取、健康探针，以及可选的 OIDC Bearer JWT 鉴权；生产加固仍属后续工作。内存 Adapter 仅在单个进程内保存状态，并不持久化。测试通过只能证明本文所述应用契约与架构契约成立，并不表示已经存在可部署的运行时。
 
 ## 模块树
 
@@ -274,9 +274,13 @@ async with create_runtime(load_settings()) as runtime:
 
 `outbox_event_publisher` 返回已装配的发布者（`InboxOutboxEventPublisher` 或 `LoggingOutboxEventPublisher`）。`logging_outbox_event_publisher` 始终暴露内部委托。需要 Inbox 处理时通过 `process_inbox_handler()` 构建 Handler。
 
-### 环境门控授权
+### 授权
 
-`EnvironmentGatedMemoryAuthorization` 为组合 Handler 实现 `MemoryAuthorizationPort`。在 OIDC 切片落地之前，授权由 `ENGRAMMESH__ENVIRONMENT` 门控：
+Episode HTTP 路由通过 `create_memory_authorization()` 在组合时按 `oidc.enabled` 选择两种授权策略之一。
+
+#### OIDC 关闭时（`oidc.enabled=false`，默认）
+
+`EnvironmentGatedMemoryAuthorization` 按 `ENGRAMMESH__ENVIRONMENT` 门控授权。不要求 Bearer 令牌。`actor_id` 来自请求体（`POST`）或查询参数（`GET`）。
 
 | `Environment` | `authorize(...)` 结果 |
 |---------------|----------------------|
@@ -285,7 +289,69 @@ async with create_runtime(load_settings()) as runtime:
 | `staging`     | 所有请求返回 `False` |
 | `production`  | 所有请求返回 `False` |
 
-授权被拒绝时，`RecordEpisodeHandler` 会抛出 `EpisodeAuthorizationDenied`（现有应用行为）。在 HTTP API 上，`staging` 与 `production` 对 `POST /v1/tenants/{tenant_id}/episodes` 因此返回 **403**，`error.code` 为 `episode_authorization_denied`；本地写入练习请使用 `development` 或 `test`。
+授权被拒绝时抛出 `EpisodeAuthorizationDenied` 或 `EpisodeReadAuthorizationDenied`。在 HTTP API 上，`staging` 与 `production` 因此返回 **403**，`error.code` 为 `episode_authorization_denied` 或 `episode_read_authorization_denied`；未启用 OIDC 的本地练习请使用 `development` 或 `test`。
+
+#### OIDC 鉴权（`oidc.enabled=true`）
+
+启用 OIDC 后，`POST` 与 `GET` Episode 路由需要有效的 `Authorization: Bearer <jwt>` 请求头。`/health` 与 `/ready` 仍无需鉴权。JWT 校验与主体绑定位于 `bootstrap/auth/`；应用 Handler 签名不变。
+
+`TenantScopedMemoryAuthorization` 取代环境门控：JWT 中的 `actor_id` 须与命令/查询中的 `actor_id` 一致，JWT 中的 `tenant_id` 须与请求 scope 租户一致。路径 `{tenant_id}` 须与 JWT 租户声明一致；不匹配时在 Handler 执行前返回 **403** `tenant_access_denied`。
+
+**校验器选择**（`create_token_verifier`）：
+
+| 条件 | 校验器 |
+|------|--------|
+| `environment` 为 `development` 或 `test`，且设置了 `dev_signing_key` | `StaticDevTokenVerifier`（HS256） |
+| 设置了 `jwks_uri` | `JwksTokenVerifier`（经 JWKS 的 RS256 / ES256 / EdDSA） |
+| 启用 OIDC 但以上均不满足 | 启动时 `ConfigurationError`（`oidc_misconfigured`） |
+
+`dev_signing_key` **仅用于开发与测试**。生产环境在启用 OIDC 时拒绝该配置（`oidc_dev_key_forbidden`），并要求非空的 `issuer` 与 `jwks_uri`。
+
+**JWT 声明要求**（默认名称可通过 `actor_claim` / `tenant_claim` 配置）：
+
+| 声明 | 默认名称 | 要求 |
+|------|----------|------|
+| Actor | `sub` | 必填；须为 UUID 字符串 |
+| Tenant | `tenant_id` | 必填；须为 UUID 字符串 |
+| 过期 | `exp` | 必填 |
+| 签发者 | `iss` | 须与配置的 `issuer` 一致 |
+| 受众 | `aud` | 仅当配置了 `audience` 时校验 |
+
+已鉴权时 `actor_id` 取自 JWT。在请求体或查询中提供 `actor_id` 返回 **422** `actor_id_not_allowed`。OIDC 关闭时省略 `actor_id` 返回 **422** `actor_id_required`。
+
+**配置**（`OidcSettings`）：
+
+| 字段 | 默认值 | 环境变量 |
+|------|--------|----------|
+| `enabled` | `false` | `ENGRAMMESH__OIDC__ENABLED` |
+| `issuer` | `""` | `ENGRAMMESH__OIDC__ISSUER` |
+| `jwks_uri` | `""` | `ENGRAMMESH__OIDC__JWKS_URI` |
+| `audience` | `null` | `ENGRAMMESH__OIDC__AUDIENCE` |
+| `actor_claim` | `sub` | `ENGRAMMESH__OIDC__ACTOR_CLAIM` |
+| `tenant_claim` | `tenant_id` | `ENGRAMMESH__OIDC__TENANT_CLAIM` |
+| `dev_signing_key` | `null` | `ENGRAMMESH__OIDC__DEV_SIGNING_KEY` |
+
+**Staging 集成测试**可在不修改 Handler 的情况下注入校验器：
+
+```python
+from engrammesh.bootstrap.http.app import create_app
+
+app = create_app(
+    runtime,
+    lifespan=lifespan,
+    token_verifier=my_test_verifier,  # 覆盖 runtime.token_verifier()
+)
+```
+
+**OIDC 错误码**（除下文摄取/读取错误码外）：
+
+| 状态码 | `error.code` | 触发条件 |
+|--------|--------------|----------|
+| `401` | `authentication_required` | 缺少或空白的 `Authorization` 请求头 |
+| `401` | `invalid_token` | Bearer 前缀格式错误、JWT 无效或校验失败 |
+| `403` | `tenant_access_denied` | JWT 租户声明与路径 `{tenant_id}` 不一致 |
+| `422` | `actor_id_not_allowed` | 启用 OIDC 时在 body 或 query 中提供了 `actor_id` |
+| `422` | `actor_id_required` | 关闭 OIDC 时缺少 `actor_id` |
 
 ## Episode 摄取 HTTP API
 
@@ -346,8 +412,13 @@ Episode 摄取错误使用统一信封：
 
 | 状态码 | `error.code` | 触发条件 |
 |--------|--------------|----------|
-| `403` | `episode_authorization_denied` | `EpisodeAuthorizationDenied`（含 `staging` / `production`） |
+| `401` | `authentication_required` | 启用 OIDC；缺少 `Authorization` 请求头 |
+| `401` | `invalid_token` | 启用 OIDC；Bearer JWT 校验失败 |
+| `403` | `tenant_access_denied` | 启用 OIDC；JWT 租户 ≠ 路径 `{tenant_id}` |
+| `403` | `episode_authorization_denied` | `EpisodeAuthorizationDenied`（含 OIDC 关闭时的 `staging` / `production`） |
 | `409` | `episode_idempotency_conflict` | 相同 `(tenant_id, idempotency_key)` 但 Episode 定义字段不同 |
+| `422` | `actor_id_not_allowed` | 启用 OIDC；body 中提供了 `actor_id` |
+| `422` | `actor_id_required` | 关闭 OIDC；body 中缺少 `actor_id` |
 | `422` | `validation_error` | Pydantic 校验失败、path/body `tenant_id` 不一致、非法 `X-Correlation-Id` |
 | `503` | `service_unavailable` | `ConfigurationError`（如 `memory_disabled`、`http_disabled`） |
 | `500` | `internal_error` | 未预期异常（响应不泄漏堆栈） |
@@ -426,8 +497,7 @@ curl -sS -X POST "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-37945
 
 `bootstrap/http/` 通过 `AppRuntime.get_episode_handler()` 与
 `AppRuntime.list_episodes_handler()` 暴露按 scope 精确读取 Episode 的能力。
-读取处理器使用 `read_episode` 授权（`EnvironmentGatedMemoryAuthorization`，与摄取相同：
-`development` 与 `test` 允许）。
+读取处理器使用 `read_episode` 授权（与摄取相同策略，见[授权](#授权)）。
 
 ### 读取查询参数
 
@@ -438,7 +508,7 @@ curl -sS -X POST "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-37945
 | `subject_id` | 是 | 租户 scope 内的 subject UUID |
 | `workspace_id` | 否 | 可选 workspace 收窄 |
 | `agent_id` | 否 | 可选 agent 收窄 |
-| `actor_id` | 是 | 授权主体（OIDC 切片前由查询参数提供） |
+| `actor_id` | OIDC 关闭时必填；OIDC 开启时省略 | 授权主体；启用 OIDC 时取自 JWT |
 
 列表端点额外接受：
 
@@ -465,8 +535,13 @@ curl -sS -X POST "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-37945
 
 | 状态码 | `error.code` | 触发条件 |
 |--------|--------------|----------|
-| `403` | `episode_read_authorization_denied` | `EpisodeReadAuthorizationDenied`（含 `staging` / `production`） |
+| `401` | `authentication_required` | 启用 OIDC；缺少 `Authorization` 请求头 |
+| `401` | `invalid_token` | 启用 OIDC；Bearer JWT 校验失败 |
+| `403` | `tenant_access_denied` | 启用 OIDC；JWT 租户 ≠ 路径 `{tenant_id}` |
+| `403` | `episode_read_authorization_denied` | `EpisodeReadAuthorizationDenied`（含 OIDC 关闭时的 `staging` / `production`） |
 | `404` | `episode_not_found` | 未知 id、scope 不匹配或跨租户访问（不泄漏存在性） |
+| `422` | `actor_id_not_allowed` | 启用 OIDC；query 中提供了 `actor_id` |
+| `422` | `actor_id_required` | 关闭 OIDC；query 中缺少 `actor_id` |
 | `422` | `invalid_episode_cursor` | 列表游标格式非法 |
 | `422` | `validation_error` | UUID 非法、`limit` 超出范围（`1`–`100`） |
 | `503` | `service_unavailable` | `ConfigurationError`（如 `memory_disabled`） |
@@ -624,6 +699,6 @@ ENGRAMMESH__POSTGRES__DSN=postgresql://engrammesh:engrammesh@localhost:5432/engr
 
 PostgreSQL Episode Adapter 已通过其类型化 Harness 绑定 `tests/contract/memory_adapter_contract.py` 中 `EPISODE_ADAPTER_CONTRACTS` 的每个断言，且未修改可复用断言主体。核心 Registry 不假定单一全局锁，也不要求 Claim 操作或游标不可用。可复用断言模块只导入公共记忆 Port、领域值与共享契约；应用编排由其他测试单独验证。`IN_MEMORY_CAPABILITY_CONTRACTS` 与 `POSTGRES_EPISODE_CAPABILITY_CONTRACTS` 分别描述各 Adapter 的不可用 Claim、拒绝游标与同步模型。
 
-生产 PostgreSQL 的后续工作包括行级安全（RLS）策略，以及 Episode 摄取之外的更广泛记忆表面。HTTP 后续工作包括 OIDC 与生产可观测性。新增共享能力行为需要单独评审的契约 Profile，而不是修改可移植 Episode 断言主体。
+生产 PostgreSQL 的后续工作包括行级安全（RLS）策略，以及 Episode 摄取之外的更广泛记忆表面。HTTP 后续工作包括生产可观测性。新增共享能力行为需要单独评审的契约 Profile，而不是修改可移植 Episode 断言主体。
 
 经过单独设计评审后，后续阶段可增加 Temporal Adapter、API、Worker 与外部事件分发。它们必须保留上述依赖与权威边界；本指南不预先授权任何供应商或可部署产品功能。

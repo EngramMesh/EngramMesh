@@ -14,9 +14,9 @@ development use.
 
 It does **not** contain a worker process or external event dispatcher, a
 dependency-injection framework, production Temporal client, model or tool
-integration, projection pipeline, or deployable product feature. A minimal HTTP
-control API exposes Episode ingest and health probes; OIDC, read APIs, and
-production hardening remain follow-up work. The in-memory adapter is process-local and non-durable. Passing tests
+integration, projection pipeline, or deployable product feature. A minimal HTTP control API exposes Episode ingest, episode read, health probes,
+and optional OIDC Bearer JWT authentication; production hardening remains
+follow-up work. The in-memory adapter is process-local and non-durable. Passing tests
 prove the documented application and architecture contracts; they do not imply
 that a deployable runtime exists.
 
@@ -407,11 +407,16 @@ or `LoggingOutboxEventPublisher`). `logging_outbox_event_publisher` always
 exposes the inner delegate. `process_inbox_handler()` builds the handler when
 inbox processing is needed.
 
-### Environment-gated authorization
+### Authorization
 
-`EnvironmentGatedMemoryAuthorization` implements `MemoryAuthorizationPort` for
-the composed handler. Until the OIDC slice lands, authorization is gated by
-`ENGRAMMESH__ENVIRONMENT`:
+Episode HTTP routes use one of two authorization strategies, selected by
+`oidc.enabled` at composition time via `create_memory_authorization()`.
+
+#### When OIDC is disabled (`oidc.enabled=false`, default)
+
+`EnvironmentGatedMemoryAuthorization` gates authorization by
+`ENGRAMMESH__ENVIRONMENT`. Bearer tokens are not required. `actor_id` comes
+from the request body (`POST`) or query parameters (`GET`).
 
 | `Environment` | `authorize(...)` result |
 |---------------|-------------------------|
@@ -420,11 +425,86 @@ the composed handler. Until the OIDC slice lands, authorization is gated by
 | `staging`     | `False` for all requests |
 | `production`  | `False` for all requests |
 
-Denied authorization surfaces as `EpisodeAuthorizationDenied` from
-`RecordEpisodeHandler` (existing application behavior). On the HTTP API,
-`staging` and `production` therefore return **403** with code
-`episode_authorization_denied` for `POST /v1/tenants/{tenant_id}/episodes`;
-use `development` or `test` for local write exercises.
+Denied authorization surfaces as `EpisodeAuthorizationDenied` or
+`EpisodeReadAuthorizationDenied`. On the HTTP API, `staging` and `production`
+therefore return **403** with code `episode_authorization_denied` or
+`episode_read_authorization_denied`; use `development` or `test` for local
+exercises without OIDC.
+
+#### OIDC authentication (`oidc.enabled=true`)
+
+When OIDC is enabled, `POST` and `GET` episode routes require a valid
+`Authorization: Bearer <jwt>` header. `/health` and `/ready` remain
+unauthenticated. JWT verification and principal binding stay in
+`bootstrap/auth/`; application handler signatures are unchanged.
+
+`TenantScopedMemoryAuthorization` replaces the environment gate: the JWT
+`actor_id` must equal the command/query `actor_id`, and the JWT `tenant_id`
+must equal the request scope tenant. Path `{tenant_id}` must match the JWT
+tenant claim; a mismatch returns **403** `tenant_access_denied` before the
+handler runs.
+
+**Verifier selection** (`create_token_verifier`):
+
+| Condition | Verifier |
+|-----------|----------|
+| `environment` is `development` or `test`, and `dev_signing_key` is set | `StaticDevTokenVerifier` (HS256) |
+| `jwks_uri` is set | `JwksTokenVerifier` (RS256 / ES256 / EdDSA via JWKS) |
+| OIDC enabled but neither applies | startup `ConfigurationError` (`oidc_misconfigured`) |
+
+`dev_signing_key` is for **development and test only**. Production rejects it
+when OIDC is enabled (`oidc_dev_key_forbidden`) and requires non-blank `issuer`
+and `jwks_uri`.
+
+**JWT claim requirements** (defaults configurable via `actor_claim` /
+`tenant_claim`):
+
+| Claim | Default name | Requirement |
+|-------|--------------|-------------|
+| Actor | `sub` | Required; must be a UUID string |
+| Tenant | `tenant_id` | Required; must be a UUID string |
+| Expiry | `exp` | Required |
+| Issuer | `iss` | Must match configured `issuer` |
+| Audience | `aud` | Verified only when `audience` is configured |
+
+When authenticated, `actor_id` is taken from the JWT. Supplying `actor_id` in
+the request body or query returns **422** `actor_id_not_allowed`. When OIDC is
+disabled, omitting `actor_id` returns **422** `actor_id_required`.
+
+**Configuration** (`OidcSettings`):
+
+| Field | Default | Environment variable |
+|-------|---------|---------------------|
+| `enabled` | `false` | `ENGRAMMESH__OIDC__ENABLED` |
+| `issuer` | `""` | `ENGRAMMESH__OIDC__ISSUER` |
+| `jwks_uri` | `""` | `ENGRAMMESH__OIDC__JWKS_URI` |
+| `audience` | `null` | `ENGRAMMESH__OIDC__AUDIENCE` |
+| `actor_claim` | `sub` | `ENGRAMMESH__OIDC__ACTOR_CLAIM` |
+| `tenant_claim` | `tenant_id` | `ENGRAMMESH__OIDC__TENANT_CLAIM` |
+| `dev_signing_key` | `null` | `ENGRAMMESH__OIDC__DEV_SIGNING_KEY` |
+
+**Staging integration tests** can inject a verifier without changing handler
+code:
+
+```python
+from engrammesh.bootstrap.http.app import create_app
+
+app = create_app(
+    runtime,
+    lifespan=lifespan,
+    token_verifier=my_test_verifier,  # overrides runtime.token_verifier()
+)
+```
+
+**OIDC error codes** (in addition to ingest/read codes below):
+
+| Status | `error.code` | Condition |
+|--------|--------------|-----------|
+| `401` | `authentication_required` | Missing or blank `Authorization` header |
+| `401` | `invalid_token` | Malformed Bearer prefix, invalid JWT, or failed verification |
+| `403` | `tenant_access_denied` | JWT tenant claim does not match path `{tenant_id}` |
+| `422` | `actor_id_not_allowed` | `actor_id` in body or query when OIDC is enabled |
+| `422` | `actor_id_required` | `actor_id` missing when OIDC is disabled |
 
 ## Episode ingest HTTP API
 
@@ -492,8 +572,13 @@ Episode ingest errors use a canonical envelope:
 
 | Status | `error.code` | Condition |
 |--------|--------------|-----------|
-| `403` | `episode_authorization_denied` | `EpisodeAuthorizationDenied` (including `staging` / `production`) |
+| `401` | `authentication_required` | OIDC enabled; missing `Authorization` header |
+| `401` | `invalid_token` | OIDC enabled; Bearer JWT verification failed |
+| `403` | `tenant_access_denied` | OIDC enabled; JWT tenant ≠ path `{tenant_id}` |
+| `403` | `episode_authorization_denied` | `EpisodeAuthorizationDenied` (including `staging` / `production` when OIDC off) |
 | `409` | `episode_idempotency_conflict` | Same `(tenant_id, idempotency_key)` with differing Episode-defining fields |
+| `422` | `actor_id_not_allowed` | OIDC enabled; `actor_id` supplied in body |
+| `422` | `actor_id_required` | OIDC disabled; `actor_id` missing from body |
 | `422` | `validation_error` | Pydantic validation, path/body `tenant_id` mismatch, invalid `X-Correlation-Id` |
 | `503` | `service_unavailable` | `ConfigurationError` (for example `memory_disabled`, `http_disabled`) |
 | `500` | `internal_error` | Unhandled exception (no stack trace in the response) |
@@ -576,8 +661,8 @@ Repeat the same request to observe an idempotent replay (`200`):
 
 `bootstrap/http/` exposes scope-accurate episode reads through
 `AppRuntime.get_episode_handler()` and `AppRuntime.list_episodes_handler()`.
-Read handlers use `read_episode` authorization via `EnvironmentGatedMemoryAuthorization`
-(same environment gate as ingest: `development` and `test` allowed).
+Read handlers use `read_episode` authorization via the same strategy as ingest
+(see [Authorization](#authorization)).
 
 ### Read query parameters
 
@@ -588,7 +673,7 @@ Both read endpoints require query parameters:
 | `subject_id` | yes | UUID subject within the tenant scope |
 | `workspace_id` | no | Optional workspace narrowing |
 | `agent_id` | no | Optional agent narrowing |
-| `actor_id` | yes | Authorization principal (until OIDC slice) |
+| `actor_id` | yes when OIDC off; omit when OIDC on | Authorization principal; from JWT when OIDC enabled |
 
 List additionally accepts:
 
@@ -615,8 +700,13 @@ Read errors reuse the canonical envelope. Additional codes beyond ingest:
 
 | Status | `error.code` | Condition |
 |--------|--------------|-----------|
-| `403` | `episode_read_authorization_denied` | `EpisodeReadAuthorizationDenied` (including `staging` / `production`) |
+| `401` | `authentication_required` | OIDC enabled; missing `Authorization` header |
+| `401` | `invalid_token` | OIDC enabled; Bearer JWT verification failed |
+| `403` | `tenant_access_denied` | OIDC enabled; JWT tenant ≠ path `{tenant_id}` |
+| `403` | `episode_read_authorization_denied` | `EpisodeReadAuthorizationDenied` (including `staging` / `production` when OIDC off) |
 | `404` | `episode_not_found` | Unknown id, wrong scope, or cross-tenant access (no existence leak) |
+| `422` | `actor_id_not_allowed` | OIDC enabled; `actor_id` supplied in query |
+| `422` | `actor_id_required` | OIDC disabled; `actor_id` missing from query |
 | `422` | `invalid_episode_cursor` | Malformed list cursor |
 | `422` | `validation_error` | Invalid UUIDs, `limit` out of range (`1`–`100`) |
 | `503` | `service_unavailable` | `ConfigurationError` (for example `memory_disabled`) |
@@ -789,8 +879,8 @@ orchestration is tested separately. `IN_MEMORY_CAPABILITY_CONTRACTS` and
 unavailable Claims, rejected cursors, and synchronization model.
 
 Follow-up work for production PostgreSQL includes row-level security policies
-and broader memory surfaces beyond Episode ingest. HTTP follow-up includes OIDC
-and production observability. New shared capability behavior requires
+and broader memory surfaces beyond Episode ingest. HTTP follow-up includes
+production observability. New shared capability behavior requires
 a separately reviewed contract profile rather than edits to the portable Episode
 assertion bodies.
 

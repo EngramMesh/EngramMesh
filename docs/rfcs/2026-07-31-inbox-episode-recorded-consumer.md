@@ -80,6 +80,6 @@ See spec acceptance criteria (7 items).
 ```text
 ① Inbox consumer + episode-recorded processor   ✅
 ② Episode read API                               ✅
-③ OIDC tenant context
+③ OIDC tenant context                            ✅
 ④ Temporal runtime adapter
 ```
