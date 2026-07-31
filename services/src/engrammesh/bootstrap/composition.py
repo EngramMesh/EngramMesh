@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from types import TracebackType
-from typing import Self, final
+from typing import Any, Self, final
 
 from engrammesh.bootstrap.auth.ports import TokenVerifierPort
 from engrammesh.bootstrap.infrastructure import (
@@ -12,7 +12,9 @@ from engrammesh.bootstrap.infrastructure import (
     LoggingOutboxEventPublisher,
     SystemUtcClock,
     UuidMemoryIdentityPort,
+    UuidRuntimeIdentityPort,
     create_memory_authorization,
+    create_runtime_authorization,
     create_token_verifier,
 )
 from engrammesh.bootstrap.settings import AppSettings, ConfigurationError
@@ -37,6 +39,24 @@ from engrammesh.modules.memory.application.process_inbox_event import (
 from engrammesh.modules.memory.application.record_episode import RecordEpisodeHandler
 from engrammesh.modules.memory.application.relay_outbox import RelayOutboxEventsHandler
 from engrammesh.modules.memory.ports import OutboxEventPublisher
+from engrammesh.modules.runtime.adapters.in_memory.database import (
+    InMemoryRuntimeDatabase,
+)
+from engrammesh.modules.runtime.adapters.in_memory.orchestrator import (
+    InMemoryOrchestratorPort,
+)
+from engrammesh.modules.runtime.adapters.temporal.client import connect_temporal_client
+from engrammesh.modules.runtime.adapters.temporal.orchestrator import (
+    TemporalOrchestratorPort,
+)
+from engrammesh.modules.runtime.application.cancel_execution import (
+    CancelExecutionHandler,
+)
+from engrammesh.modules.runtime.application.get_execution_snapshot import (
+    GetExecutionSnapshotHandler,
+)
+from engrammesh.modules.runtime.application.start_execution import StartExecutionHandler
+from engrammesh.modules.runtime.ports import OrchestratorPort
 
 
 def load_settings() -> AppSettings:
@@ -59,16 +79,22 @@ class ReadinessError(Exception):
 @final
 class AppRuntime:
     __slots__ = (
+        "_cancel_execution_handler",
         "_database",
+        "_execution_index",
         "_get_episode_handler",
+        "_get_execution_snapshot_handler",
         "_handler",
         "_inbox_handler",
         "_list_episodes_handler",
         "_logging_publisher",
+        "_orchestrator",
         "_outbox_publisher",
         "_relay_handler",
         "_settings",
+        "_start_execution_handler",
         "_started",
+        "_temporal_client",
         "_token_verifier",
         "_unit_of_work_factory",
     )
@@ -85,6 +111,12 @@ class AppRuntime:
         self._logging_publisher = LoggingOutboxEventPublisher()
         self._outbox_publisher: OutboxEventPublisher = self._logging_publisher
         self._relay_handler: RelayOutboxEventsHandler | None = None
+        self._execution_index: InMemoryRuntimeDatabase | None = None
+        self._orchestrator: OrchestratorPort | None = None
+        self._temporal_client: Any = None
+        self._start_execution_handler: StartExecutionHandler | None = None
+        self._get_execution_snapshot_handler: GetExecutionSnapshotHandler | None = None
+        self._cancel_execution_handler: CancelExecutionHandler | None = None
         self._started = False
 
     @property
@@ -106,25 +138,43 @@ class AppRuntime:
             raise ReadinessError("database_unavailable") from None
 
     async def startup(self) -> None:
-        if not self._settings.modules.memory_enabled:
-            return
-        if self._started:
-            return
-        database = PostgresMemoryDatabase(
-            self._settings.postgres.dsn.get_secret_value()
-        )
-        await database.open()
-        self._database = database
-        self._unit_of_work_factory = PostgresMemoryUnitOfWorkFactory(database)
-        self._started = True
-        self._logging_publisher = LoggingOutboxEventPublisher()
-        if self._settings.inbox.enabled:
-            self._outbox_publisher = InboxOutboxEventPublisher(
-                inbox_handler=self.process_inbox_handler(),
-                delegate=self._logging_publisher,
+        if self._settings.modules.memory_enabled and not self._started:
+            database = PostgresMemoryDatabase(
+                self._settings.postgres.dsn.get_secret_value()
             )
-        else:
-            self._outbox_publisher = self._logging_publisher
+            await database.open()
+            self._database = database
+            self._unit_of_work_factory = PostgresMemoryUnitOfWorkFactory(database)
+            self._started = True
+            self._logging_publisher = LoggingOutboxEventPublisher()
+            if self._settings.inbox.enabled:
+                self._outbox_publisher = InboxOutboxEventPublisher(
+                    inbox_handler=self.process_inbox_handler(),
+                    delegate=self._logging_publisher,
+                )
+            else:
+                self._outbox_publisher = self._logging_publisher
+
+        if self._settings.modules.runtime_enabled and self._orchestrator is None:
+            self._execution_index = InMemoryRuntimeDatabase()
+            if self._settings.temporal.enabled:
+                self._temporal_client = await connect_temporal_client(
+                    self._settings.temporal
+                )
+            self._orchestrator = self._create_orchestrator()
+
+    def _create_orchestrator(self) -> OrchestratorPort:
+        assert self._execution_index is not None
+        clock = SystemUtcClock()
+        if not self._settings.temporal.enabled:
+            return InMemoryOrchestratorPort(clock, self._execution_index)
+        assert self._temporal_client is not None
+        return TemporalOrchestratorPort(
+            self._temporal_client,
+            task_queue=self._settings.temporal.task_queue,
+            index=self._execution_index,
+            clock=clock,
+        )
 
     async def shutdown(self) -> None:
         database = self._database
@@ -135,6 +185,12 @@ class AppRuntime:
         self._list_episodes_handler = None
         self._inbox_handler = None
         self._relay_handler = None
+        self._execution_index = None
+        self._orchestrator = None
+        self._temporal_client = None
+        self._start_execution_handler = None
+        self._get_execution_snapshot_handler = None
+        self._cancel_execution_handler = None
         self._logging_publisher = LoggingOutboxEventPublisher()
         self._outbox_publisher = LoggingOutboxEventPublisher()
         self._started = False
@@ -226,6 +282,49 @@ class AppRuntime:
                 publisher=self.outbox_event_publisher,
             )
         return self._relay_handler
+
+    def start_execution_handler(self) -> StartExecutionHandler:
+        if not self._settings.modules.runtime_enabled:
+            msg = "runtime module is disabled"
+            raise ConfigurationError("runtime_disabled", msg)
+        if self._orchestrator is None:
+            msg = "application runtime is not started"
+            raise RuntimeError(msg)
+        if self._start_execution_handler is None:
+            self._start_execution_handler = StartExecutionHandler(
+                authorization=create_runtime_authorization(self._settings),
+                identities=UuidRuntimeIdentityPort(),
+                orchestrator=self._orchestrator,
+            )
+        return self._start_execution_handler
+
+    def get_execution_snapshot_handler(self) -> GetExecutionSnapshotHandler:
+        if not self._settings.modules.runtime_enabled:
+            msg = "runtime module is disabled"
+            raise ConfigurationError("runtime_disabled", msg)
+        if self._orchestrator is None:
+            msg = "application runtime is not started"
+            raise RuntimeError(msg)
+        if self._get_execution_snapshot_handler is None:
+            self._get_execution_snapshot_handler = GetExecutionSnapshotHandler(
+                authorization=create_runtime_authorization(self._settings),
+                orchestrator=self._orchestrator,
+            )
+        return self._get_execution_snapshot_handler
+
+    def cancel_execution_handler(self) -> CancelExecutionHandler:
+        if not self._settings.modules.runtime_enabled:
+            msg = "runtime module is disabled"
+            raise ConfigurationError("runtime_disabled", msg)
+        if self._orchestrator is None:
+            msg = "application runtime is not started"
+            raise RuntimeError(msg)
+        if self._cancel_execution_handler is None:
+            self._cancel_execution_handler = CancelExecutionHandler(
+                authorization=create_runtime_authorization(self._settings),
+                orchestrator=self._orchestrator,
+            )
+        return self._cancel_execution_handler
 
     async def relay_outbox_once(
         self,
