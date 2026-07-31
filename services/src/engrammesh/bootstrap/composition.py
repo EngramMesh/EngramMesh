@@ -27,6 +27,8 @@ from engrammesh.modules.memory.application.contracts import (
 from engrammesh.modules.memory.application.episode_recorded_processor import (
     EpisodeRecordedProcessor,
 )
+from engrammesh.modules.memory.application.get_episode import GetEpisodeHandler
+from engrammesh.modules.memory.application.list_episodes import ListEpisodesHandler
 from engrammesh.modules.memory.application.process_inbox_event import (
     ProcessInboxEventHandler,
 )
@@ -56,8 +58,10 @@ class ReadinessError(Exception):
 class AppRuntime:
     __slots__ = (
         "_database",
+        "_get_episode_handler",
         "_handler",
         "_inbox_handler",
+        "_list_episodes_handler",
         "_logging_publisher",
         "_outbox_publisher",
         "_relay_handler",
@@ -71,6 +75,8 @@ class AppRuntime:
         self._database: PostgresMemoryDatabase | None = None
         self._unit_of_work_factory: PostgresMemoryUnitOfWorkFactory | None = None
         self._handler: RecordEpisodeHandler | None = None
+        self._get_episode_handler: GetEpisodeHandler | None = None
+        self._list_episodes_handler: ListEpisodesHandler | None = None
         self._inbox_handler: ProcessInboxEventHandler | None = None
         self._logging_publisher = LoggingOutboxEventPublisher()
         self._outbox_publisher: OutboxEventPublisher = self._logging_publisher
@@ -118,6 +124,8 @@ class AppRuntime:
         self._database = None
         self._unit_of_work_factory = None
         self._handler = None
+        self._get_episode_handler = None
+        self._list_episodes_handler = None
         self._inbox_handler = None
         self._relay_handler = None
         self._logging_publisher = LoggingOutboxEventPublisher()
@@ -167,6 +175,38 @@ class AppRuntime:
                 unit_of_work_factory=self._unit_of_work_factory,
             )
         return self._handler
+
+    def get_episode_handler(self) -> GetEpisodeHandler:
+        if not self._settings.modules.memory_enabled:
+            msg = "memory module is disabled"
+            raise ConfigurationError("memory_disabled", msg)
+        if not self._started or self._unit_of_work_factory is None:
+            msg = "application runtime is not started"
+            raise RuntimeError(msg)
+        if self._get_episode_handler is None:
+            self._get_episode_handler = GetEpisodeHandler(
+                authorization=EnvironmentGatedMemoryAuthorization(
+                    self._settings.environment
+                ),
+                unit_of_work_factory=self._unit_of_work_factory,
+            )
+        return self._get_episode_handler
+
+    def list_episodes_handler(self) -> ListEpisodesHandler:
+        if not self._settings.modules.memory_enabled:
+            msg = "memory module is disabled"
+            raise ConfigurationError("memory_disabled", msg)
+        if not self._started or self._unit_of_work_factory is None:
+            msg = "application runtime is not started"
+            raise RuntimeError(msg)
+        if self._list_episodes_handler is None:
+            self._list_episodes_handler = ListEpisodesHandler(
+                authorization=EnvironmentGatedMemoryAuthorization(
+                    self._settings.environment
+                ),
+                unit_of_work_factory=self._unit_of_work_factory,
+            )
+        return self._list_episodes_handler
 
     def relay_outbox_handler(self) -> RelayOutboxEventsHandler:
         if not self._settings.modules.memory_enabled:
