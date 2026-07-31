@@ -53,3 +53,15 @@ def test_production_forbids_dev_signing_key_when_oidc_enabled() -> None:
                 }
             )
         )
+
+
+def test_oidc_dev_signing_key_is_redacted_from_representations() -> None:
+    secret = "do-not-expose-dev-signing-key"
+    settings = AppSettings.model_validate(
+        _base(oidc={"dev_signing_key": secret}),
+    )
+
+    assert secret not in repr(settings)
+    assert secret not in str(settings.model_dump(mode="json"))
+    assert settings.oidc.dev_signing_key is not None
+    assert settings.oidc.dev_signing_key.get_secret_value() == secret
