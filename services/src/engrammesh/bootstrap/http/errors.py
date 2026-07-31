@@ -11,13 +11,24 @@ from starlette.responses import JSONResponse
 from engrammesh.bootstrap.composition import ReadinessError
 from engrammesh.bootstrap.http.mappers import (
     InvalidCorrelationIdError,
+    LimitOutOfRangeError,
     TenantMismatchError,
 )
 from engrammesh.bootstrap.settings import ConfigurationError
-from engrammesh.modules.memory.application.errors import EpisodeAuthorizationDenied
-from engrammesh.modules.memory.domain.errors import EpisodeIdempotencyConflict
+from engrammesh.modules.memory.application.errors import (
+    EpisodeAuthorizationDenied,
+    EpisodeNotFound,
+    EpisodeReadAuthorizationDenied,
+)
+from engrammesh.modules.memory.domain.errors import (
+    EpisodeIdempotencyConflict,
+    InvalidEpisodeCursor,
+)
 
 _EPISODE_AUTHORIZATION_DENIED_MESSAGE = "episode recording is not authorized"
+_EPISODE_READ_AUTHORIZATION_DENIED_MESSAGE = "episode reading is not authorized"
+_EPISODE_NOT_FOUND_MESSAGE = "episode not found"
+_INVALID_EPISODE_CURSOR_MESSAGE = "episode list cursor is invalid"
 _EPISODE_IDEMPOTENCY_CONFLICT_MESSAGE = (
     "idempotency key conflicts with an existing episode"
 )
@@ -54,6 +65,45 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=error_envelope(
                 "episode_authorization_denied",
                 _EPISODE_AUTHORIZATION_DENIED_MESSAGE,
+            ),
+        )
+
+    @app.exception_handler(EpisodeReadAuthorizationDenied)
+    async def episode_read_authorization_denied_handler(
+        _request: Request,
+        _exc: EpisodeReadAuthorizationDenied,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=403,
+            content=error_envelope(
+                "episode_read_authorization_denied",
+                _EPISODE_READ_AUTHORIZATION_DENIED_MESSAGE,
+            ),
+        )
+
+    @app.exception_handler(EpisodeNotFound)
+    async def episode_not_found_handler(
+        _request: Request,
+        _exc: EpisodeNotFound,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content=error_envelope(
+                "episode_not_found",
+                _EPISODE_NOT_FOUND_MESSAGE,
+            ),
+        )
+
+    @app.exception_handler(InvalidEpisodeCursor)
+    async def invalid_episode_cursor_handler(
+        _request: Request,
+        _exc: InvalidEpisodeCursor,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content=error_envelope(
+                "invalid_episode_cursor",
+                _INVALID_EPISODE_CURSOR_MESSAGE,
             ),
         )
 
@@ -104,6 +154,26 @@ def register_exception_handlers(app: FastAPI) -> None:
                     {
                         "type": "value_error",
                         "loc": ["header", "X-Correlation-Id"],
+                        "msg": str(exc),
+                    },
+                ),
+            ),
+        )
+
+    @app.exception_handler(LimitOutOfRangeError)
+    async def limit_out_of_range_handler(
+        _request: Request,
+        exc: LimitOutOfRangeError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content=error_envelope(
+                "validation_error",
+                _VALIDATION_ERROR_MESSAGE,
+                details=(
+                    {
+                        "type": "value_error",
+                        "loc": ["query", "limit"],
                         "msg": str(exc),
                     },
                 ),

@@ -9,11 +9,19 @@ from engrammesh.bootstrap.http.errors import (
 )
 from engrammesh.bootstrap.http.mappers import (
     InvalidCorrelationIdError,
+    LimitOutOfRangeError,
     TenantMismatchError,
 )
 from engrammesh.bootstrap.settings import ConfigurationError
-from engrammesh.modules.memory.application.errors import EpisodeAuthorizationDenied
-from engrammesh.modules.memory.domain.errors import EpisodeIdempotencyConflict
+from engrammesh.modules.memory.application.errors import (
+    EpisodeAuthorizationDenied,
+    EpisodeNotFound,
+    EpisodeReadAuthorizationDenied,
+)
+from engrammesh.modules.memory.domain.errors import (
+    EpisodeIdempotencyConflict,
+    InvalidEpisodeCursor,
+)
 
 
 def test_error_envelope_builds_canonical_shape() -> None:
@@ -45,6 +53,22 @@ def error_app() -> FastAPI:
     @app.get("/episode-authorization-denied")
     async def episode_authorization_denied() -> None:
         raise EpisodeAuthorizationDenied()
+
+    @app.get("/episode-read-authorization-denied")
+    async def episode_read_authorization_denied() -> None:
+        raise EpisodeReadAuthorizationDenied()
+
+    @app.get("/episode-not-found")
+    async def episode_not_found() -> None:
+        raise EpisodeNotFound()
+
+    @app.get("/invalid-episode-cursor")
+    async def invalid_episode_cursor() -> None:
+        raise InvalidEpisodeCursor()
+
+    @app.get("/limit-out-of-range")
+    async def limit_out_of_range() -> None:
+        raise LimitOutOfRangeError("limit must be between 1 and 100")
 
     @app.get("/episode-idempotency-conflict")
     async def episode_idempotency_conflict() -> None:
@@ -86,6 +110,71 @@ async def test_episode_authorization_denied_maps_to_403(
     assert response.json() == error_envelope(
         "episode_authorization_denied",
         "episode recording is not authorized",
+    )
+
+
+@pytest.mark.asyncio
+async def test_episode_read_authorization_denied_maps_to_403(
+    error_app: FastAPI,
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=error_app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/episode-read-authorization-denied")
+    assert response.status_code == 403
+    assert response.json() == error_envelope(
+        "episode_read_authorization_denied",
+        "episode reading is not authorized",
+    )
+
+
+@pytest.mark.asyncio
+async def test_episode_not_found_maps_to_404(error_app: FastAPI) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=error_app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/episode-not-found")
+    assert response.status_code == 404
+    assert response.json() == error_envelope(
+        "episode_not_found",
+        "episode not found",
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalid_episode_cursor_maps_to_422(error_app: FastAPI) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=error_app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/invalid-episode-cursor")
+    assert response.status_code == 422
+    assert response.json() == error_envelope(
+        "invalid_episode_cursor",
+        "episode list cursor is invalid",
+    )
+
+
+@pytest.mark.asyncio
+async def test_limit_out_of_range_maps_to_422(error_app: FastAPI) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=error_app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/limit-out-of-range")
+    assert response.status_code == 422
+    assert response.json() == error_envelope(
+        "validation_error",
+        "request validation failed",
+        details=(
+            {
+                "type": "value_error",
+                "loc": ["query", "limit"],
+                "msg": "limit must be between 1 and 100",
+            },
+        ),
     )
 
 
