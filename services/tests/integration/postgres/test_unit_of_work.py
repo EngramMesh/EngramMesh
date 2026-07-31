@@ -15,13 +15,13 @@ from contract.memory_adapter_contract import (
     assert_cancellation_after_commit_remains_and_releases_lock,
     assert_cancellation_inside_transaction_rolls_back_and_releases_lock,
     assert_commit_persists_episode_and_outbox_atomically,
+    assert_cursor_pagination_is_stable,
     assert_divergent_idempotency_conflicts,
     assert_exact_idempotent_replay,
     assert_exit_without_commit_rolls_back,
     assert_first_append_get_and_stream,
     make_episode,
     make_event,
-    make_scope,
 )
 from psycopg.rows import dict_row
 
@@ -267,17 +267,10 @@ async def test_cancellation_after_commit_remains_and_releases_lock(
 
 
 @pytest.mark.asyncio
-async def test_cursor_rejection_matches_in_memory_message(
+async def test_stream_cursor_pagination(
     harness_factory: MemoryAdapterHarnessFactory,
 ) -> None:
-    harness = harness_factory()
-
-    async with harness.unit_of_work_factory.create() as unit_of_work:
-        with pytest.raises(
-            ValueError,
-            match="in-memory episode cursors are unavailable",
-        ):
-            await unit_of_work.episodes.stream(make_scope(), cursor="next")
+    await assert_cursor_pagination_is_stable(harness_factory)
 
 
 @pytest.mark.asyncio
