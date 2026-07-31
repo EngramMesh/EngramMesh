@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://engrammesh.org/contracts/memory/v1/episode-response.schema.json",
+  "version": "1.0.0",
+  "title": "Memory Episode HTTP Response",
+  "description": "Version 1.0.0 contract for one episode in HTTP read responses.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "episode_id",
+    "scope",
+    "actor_id",
+    "source_type",
+    "content_ref",
+    "observed_at",
+    "ingested_at",
+    "content_hash",
+    "idempotency_key",
+    "sensitivity",
+    "retention_class",
+    "consent_basis"
+  ],
+  "properties": {
+    "episode_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "scope": {
+      "$ref": "#/$defs/httpMemoryScope"
+    },
+    "actor_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "source_type": {
+      "enum": [
+        "user",
+        "agent",
+        "tool",
+        "file",
+        "system"
+      ]
+    },
+    "content_ref": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "ingested_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "content_hash": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "sensitivity": {
+      "enum": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ]
+    },
+    "retention_class": {
+      "enum": [
+        "ephemeral",
+        "standard",
+        "extended",
+        "legal_hold"
+      ]
+    },
+    "consent_basis": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    }
+  },
+  "$defs": {
+    "httpMemoryScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenant_id",
+        "subject_id"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "subject_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "workspace_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "agent_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        }
+      }
+    }
+  }
+}
