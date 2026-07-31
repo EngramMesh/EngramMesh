@@ -52,6 +52,11 @@ Semantic Versioning after its first public release.
   `GET /v1/tenants/{tenant_id}/episodes` with keyset cursor pagination,
   `GetEpisodeHandler` / `ListEpisodesHandler`, response JSON Schemas, and
   integration coverage.
+- OIDC tenant context: Bearer JWT on episode routes when `oidc.enabled=true`,
+  `StaticDevTokenVerifier` and `JwksTokenVerifier`, `TenantScopedMemoryAuthorization`,
+  principal-aware HTTP mappers, `record-episode-request` schema v1.1.0 (optional
+  `actor_id`), integration and PostgreSQL E2E coverage, and bilingual services
+  documentation for OIDC settings and error codes.
 
 ### Changed
 
