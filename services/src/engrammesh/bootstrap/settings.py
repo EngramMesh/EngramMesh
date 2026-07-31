@@ -64,6 +64,7 @@ class PostgresSettings(_FrozenSettingsModel):
 class TemporalSettings(_FrozenSettingsModel):
     """Temporal connection and worker routing boundary."""
 
+    enabled: bool = False
     address: str = "localhost:7233"
     namespace: str
     task_queue: str

@@ -20,7 +20,7 @@ from engrammesh.bootstrap.settings import (
 
 EXPECTED_MODEL_FIELDS: Mapping[type[object], tuple[str, ...]] = {
     PostgresSettings: ("dsn",),
-    TemporalSettings: ("address", "namespace", "task_queue", "tls"),
+    TemporalSettings: ("enabled", "address", "namespace", "task_queue", "tls"),
     TelemetrySettings: ("otlp_endpoint", "capture_sensitive_content"),
     ModuleSettings: ("memory_enabled", "runtime_enabled"),
     HttpSettings: ("enabled", "host", "port"),
@@ -97,6 +97,7 @@ def test_settings_parse_prefixed_nested_environment_variables(
         namespace="engrammesh-test",
         task_queue="engrammesh-test",
         tls=True,
+        enabled=False,
     )
     assert settings.telemetry.otlp_endpoint == "https://otel.test/v1/traces"
     assert settings.modules.runtime_enabled is False
@@ -343,6 +344,29 @@ def test_temporal_namespace_and_task_queue_are_required_and_non_blank(
 
     with pytest.raises(ValidationError):
         _settings(temporal=temporal)
+
+
+def test_temporal_settings_enabled_defaults_to_false() -> None:
+    settings = _settings()
+
+    assert settings.temporal.enabled is False
+
+
+def test_temporal_settings_enabled_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENGRAMMESH__ENVIRONMENT", "test")
+    monkeypatch.setenv(
+        "ENGRAMMESH__POSTGRES__DSN",
+        "postgresql://engrammesh:secret@localhost/engrammesh",
+    )
+    monkeypatch.setenv("ENGRAMMESH__TEMPORAL__NAMESPACE", "engrammesh-test")
+    monkeypatch.setenv("ENGRAMMESH__TEMPORAL__TASK_QUEUE", "engrammesh-test")
+    monkeypatch.setenv("ENGRAMMESH__TEMPORAL__ENABLED", "true")
+
+    settings = AppSettings()
+
+    assert settings.temporal.enabled is True
 
 
 def test_http_settings_defaults() -> None:
