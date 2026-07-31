@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Never
 from uuid import UUID
 
 import pytest
@@ -34,6 +35,12 @@ TENANT = TenantId(UUID("53dad495-7915-439a-b03a-379452a1aa86"))
 SUBJECT = SubjectId(UUID("3d65c071-ac55-4847-a8f1-e3cb859d3c45"))
 ACTOR = SubjectId(UUID("3ba213e4-3367-4e7c-9635-bcbfbad505e6"))
 EPISODE_ID = MemoryId(UUID("840ddfba-f834-486b-b918-bbb87a6bf9db"))
+
+
+class MustNotBeUsed:
+    def __getattr__(self, name: str) -> Never:
+        msg = f"unexpected dependency access: {name}"
+        raise AssertionError(msg)
 
 
 @dataclass
@@ -113,12 +120,11 @@ async def test_get_episode_raises_not_found() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_episode_denial_authorizes_only() -> None:
+async def test_get_episode_denial_authorizes_first_and_accesses_nothing_else() -> None:
     authorization = RecordingAuthorization(allowed=False)
-    factory = InMemoryMemoryUnitOfWorkFactory(InMemoryMemoryDatabase())
     handler = GetEpisodeHandler(
         authorization=authorization,
-        unit_of_work_factory=factory,
+        unit_of_work_factory=MustNotBeUsed(),
     )
     with pytest.raises(EpisodeReadAuthorizationDenied):
         await handler.handle(
