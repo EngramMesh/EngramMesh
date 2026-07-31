@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from uuid import UUID
 
 import jwt
+from jwt import PyJWKClient
 from jwt.types import Options
 
 from engrammesh.bootstrap.auth.errors import InvalidTokenError
@@ -51,6 +53,57 @@ class StaticDevTokenVerifier:
                 token,
                 self._signing_key,
                 algorithms=["HS256"],
+                issuer=self._issuer,
+                audience=self._audience,
+                options=options,
+            )
+        except jwt.PyJWTError as exc:
+            raise InvalidTokenError() from exc
+        return AuthenticatedPrincipal(
+            actor_id=SubjectId(_claim_uuid(payload, self._actor_claim)),
+            tenant_id=TenantId(_claim_uuid(payload, self._tenant_claim)),
+        )
+
+
+class JwksTokenVerifier:
+    """JWKS-backed JWT verifier for staging and production environments."""
+
+    def __init__(
+        self,
+        *,
+        issuer: str,
+        jwks_uri: str = "",
+        jwks_client: Any | None = None,
+        actor_claim: str = "sub",
+        tenant_claim: str = "tenant_id",
+        audience: str | None = None,
+    ) -> None:
+        if jwks_client is None:
+            if not jwks_uri:
+                msg = "jwks_uri or jwks_client is required"
+                raise ValueError(msg)
+            jwks_client = PyJWKClient(jwks_uri)
+        self._issuer = issuer
+        self._jwks_client = jwks_client
+        self._actor_claim = actor_claim
+        self._tenant_claim = tenant_claim
+        self._audience = audience
+
+    async def verify(self, token: str) -> AuthenticatedPrincipal:
+        try:
+            signing_key = await asyncio.to_thread(
+                self._jwks_client.get_signing_key_from_jwt,
+                token,
+            )
+            options: Options = (
+                {**_decode_options, "verify_aud": False}
+                if self._audience is None
+                else _decode_options
+            )
+            payload = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["RS256", "ES256", "EdDSA"],
                 issuer=self._issuer,
                 audience=self._audience,
                 options=options,
