@@ -21,8 +21,12 @@ from engrammesh.modules.memory.ports import (
     MemoryAuthorizationPort,
     OutboxEventPublisher,
 )
+from engrammesh.modules.runtime.ports import (
+    RuntimeAuthorizationPort,
+    RuntimeAuthorizationRequest,
+)
 from engrammesh.shared.kernel.events import EventEnvelope
-from engrammesh.shared.kernel.ids import EventId, MemoryId
+from engrammesh.shared.kernel.ids import EventId, ExecutionId, MemoryId
 
 
 @final
@@ -106,6 +110,31 @@ def create_memory_authorization(settings: AppSettings) -> MemoryAuthorizationPor
     if settings.oidc.enabled:
         return TenantScopedMemoryAuthorization()
     return EnvironmentGatedMemoryAuthorization(settings.environment)
+
+
+@final
+class EnvironmentGatedRuntimeAuthorization:
+    __slots__ = ("_environment",)
+
+    def __init__(self, environment: Environment) -> None:
+        self._environment = environment
+
+    async def authorize(self, request: RuntimeAuthorizationRequest) -> bool:
+        del request
+        return self._environment in {
+            Environment.DEVELOPMENT,
+            Environment.TEST,
+        }
+
+
+@final
+class UuidRuntimeIdentityPort:
+    async def new_execution_id(self) -> ExecutionId:
+        return ExecutionId(uuid4())
+
+
+def create_runtime_authorization(settings: AppSettings) -> RuntimeAuthorizationPort:
+    return EnvironmentGatedRuntimeAuthorization(settings.environment)
 
 
 def create_token_verifier(settings: AppSettings) -> TokenVerifierPort | None:

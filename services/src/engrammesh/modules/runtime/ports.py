@@ -1,7 +1,9 @@
 """Async, framework-neutral ports for durable multi-Agent execution."""
 
 from collections.abc import Mapping
-from typing import Protocol, runtime_checkable
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Literal, Protocol, runtime_checkable
 
 from engrammesh.modules.memory.public import EvidencePacket, MemoryScope
 from engrammesh.modules.runtime.domain.model import (
@@ -16,7 +18,16 @@ from engrammesh.modules.runtime.domain.model import (
     ToolDescriptor,
     ToolResult,
 )
-from engrammesh.shared.kernel.ids import ArtifactId, ExecutionId
+from engrammesh.shared.kernel.ids import ArtifactId, ExecutionId, SubjectId
+
+RuntimeAction = Literal["start_execution", "get_execution", "cancel_execution"]
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeAuthorizationRequest:
+    actor_id: SubjectId
+    scope: MemoryScope
+    action: RuntimeAction
 
 
 @runtime_checkable
@@ -131,3 +142,18 @@ class RemoteAgentPort(Protocol):
     """Remote Agent boundary, with A2A confined to an adapter."""
 
     async def invoke(self, invocation: AgentInvocation) -> AgentOutcome: ...
+
+
+@runtime_checkable
+class RuntimeAuthorizationPort(Protocol):
+    async def authorize(self, request: RuntimeAuthorizationRequest) -> bool: ...
+
+
+@runtime_checkable
+class RuntimeIdentityPort(Protocol):
+    async def new_execution_id(self) -> ExecutionId: ...
+
+
+@runtime_checkable
+class ClockPort(Protocol):
+    async def now(self) -> datetime: ...

@@ -40,11 +40,14 @@ from engrammesh.modules.runtime.domain.model import (
 from engrammesh.modules.runtime.ports import (
     AgentEnginePort,
     ArtifactStorePort,
+    ClockPort,
     ModelProviderPort,
     OrchestratorPort,
     PlannerPort,
     PolicyPort,
     RemoteAgentPort,
+    RuntimeAuthorizationPort,
+    RuntimeIdentityPort,
     ToolExecutorPort,
     ToolRegistryPort,
 )
@@ -69,6 +72,9 @@ PROTOCOLS = (
     PolicyPort,
     ArtifactStorePort,
     RemoteAgentPort,
+    RuntimeAuthorizationPort,
+    RuntimeIdentityPort,
+    ClockPort,
 )
 
 EXPECTED_METHODS = {
@@ -81,6 +87,9 @@ EXPECTED_METHODS = {
     PolicyPort: ("authorize_agent", "authorize_tool"),
     ArtifactStorePort: ("put", "get"),
     RemoteAgentPort: ("invoke",),
+    RuntimeAuthorizationPort: ("authorize",),
+    RuntimeIdentityPort: ("new_execution_id",),
+    ClockPort: ("now",),
 }
 
 DATACLASS_SHAPES = {
