@@ -20,6 +20,7 @@ from engrammesh.modules.memory.adapters.postgres.mappers import (
     event_to_row,
     row_to_episode,
 )
+from engrammesh.modules.memory.domain.episode_cursor import decode_episode_cursor
 from engrammesh.modules.memory.domain.errors import EpisodeIdempotencyConflict
 from engrammesh.modules.memory.domain.model import Claim, Episode, MemoryScope
 from engrammesh.modules.memory.ports import (
@@ -38,7 +39,6 @@ _NOT_ACTIVE = "memory transaction is not active"
 _ALREADY_ENTERED = "memory transaction cannot be entered more than once"
 _ALREADY_COMMITTED = "memory transaction has already been committed"
 _CLAIMS_UNAVAILABLE = "in-memory claim store is unavailable"
-_CURSORS_UNAVAILABLE = "in-memory episode cursors are unavailable"
 _EPISODE_RECORDED = "memory.episode-recorded"
 _EVENT_AGGREGATE_UNKNOWN = "outbox episode event aggregate is unknown"
 _EVENT_TENANT_MISMATCH = "outbox event tenant does not match episode tenant"
@@ -260,11 +260,30 @@ class _PostgresEpisodeStore:
     async def stream(
         self,
         scope: MemoryScope,
+        *,
+        limit: int | None = None,
         cursor: str | None = None,
     ) -> tuple[Episode, ...]:
         self._state.require_usable()
+        if cursor is not None and limit is None:
+            msg = "cursor requires limit"
+            raise ValueError(msg)
+        if limit is not None and limit <= 0:
+            msg = "limit must be positive"
+            raise ValueError(msg)
+        params = _scope_params(scope)
+        cursor_clause = ""
         if cursor is not None:
-            raise ValueError(_CURSORS_UNAVAILABLE)
+            cursor_at, cursor_id = decode_episode_cursor(cursor)
+            params["cursor_ingested_at"] = cursor_at
+            params["cursor_episode_id"] = cursor_id.value
+            cursor_clause = """
+              AND (ingested_at, episode_id) > (%(cursor_ingested_at)s, %(cursor_episode_id)s)
+            """
+        limit_clause = ""
+        if limit is not None:
+            params["limit"] = limit
+            limit_clause = "LIMIT %(limit)s"
         async with self._state.connection.cursor(row_factory=dict_row) as cursor_:
             await cursor_.execute(
                 f"""
@@ -274,9 +293,11 @@ class _PostgresEpisodeStore:
                   AND subject_id = %(subject_id)s
                   AND workspace_id IS NOT DISTINCT FROM %(workspace_id)s
                   AND agent_id IS NOT DISTINCT FROM %(agent_id)s
+                  {cursor_clause}
                 ORDER BY ingested_at ASC, episode_id ASC
+                {limit_clause}
                 """,
-                _scope_params(scope),
+                params,
             )
             rows = await cursor_.fetchall()
         return tuple(row_to_episode(row) for row in rows)
