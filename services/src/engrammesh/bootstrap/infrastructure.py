@@ -7,7 +7,12 @@ from typing import final
 from uuid import uuid4
 
 from engrammesh.bootstrap.auth.context import current_principal
-from engrammesh.bootstrap.settings import AppSettings, Environment
+from engrammesh.bootstrap.auth.ports import TokenVerifierPort
+from engrammesh.bootstrap.auth.token_verifiers import (
+    JwksTokenVerifier,
+    StaticDevTokenVerifier,
+)
+from engrammesh.bootstrap.settings import AppSettings, ConfigurationError, Environment
 from engrammesh.modules.memory.application.process_inbox_event import (
     ProcessInboxEventHandler,
 )
@@ -101,3 +106,32 @@ def create_memory_authorization(settings: AppSettings) -> MemoryAuthorizationPor
     if settings.oidc.enabled:
         return TenantScopedMemoryAuthorization()
     return EnvironmentGatedMemoryAuthorization(settings.environment)
+
+
+def create_token_verifier(settings: AppSettings) -> TokenVerifierPort | None:
+    oidc = settings.oidc
+    if not oidc.enabled:
+        return None
+    if (
+        settings.environment in {Environment.DEVELOPMENT, Environment.TEST}
+        and oidc.dev_signing_key is not None
+    ):
+        return StaticDevTokenVerifier(
+            issuer=oidc.issuer or "https://dev.engrammesh.test",
+            signing_key=oidc.dev_signing_key,
+            actor_claim=oidc.actor_claim,
+            tenant_claim=oidc.tenant_claim,
+            audience=oidc.audience,
+        )
+    if oidc.jwks_uri:
+        return JwksTokenVerifier(
+            issuer=oidc.issuer,
+            jwks_uri=oidc.jwks_uri,
+            actor_claim=oidc.actor_claim,
+            tenant_claim=oidc.tenant_claim,
+            audience=oidc.audience,
+        )
+    raise ConfigurationError(
+        "oidc_misconfigured",
+        "OIDC is enabled but no verifier can be constructed",
+    )

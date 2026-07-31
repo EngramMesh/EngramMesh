@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from engrammesh.bootstrap.auth.token_verifiers import StaticDevTokenVerifier
 from engrammesh.bootstrap.composition import (
     ReadinessError,
     create_runtime,
@@ -30,6 +31,29 @@ def _test_settings(**overrides: object) -> AppSettings:
     }
     values.update(overrides)
     return AppSettings.model_validate(values)
+
+
+def test_runtime_exposes_static_dev_verifier_in_test_environment() -> None:
+    settings = _test_settings(
+        oidc={
+            "enabled": True,
+            "issuer": "https://dev.engrammesh.test",
+            "dev_signing_key": "dev-only-signing-key-not-for-production",
+        },
+    )
+    runtime = create_runtime(settings)
+    verifier = runtime.token_verifier()
+    assert isinstance(verifier, StaticDevTokenVerifier)
+
+
+def test_staging_without_jwks_raises_at_runtime_construction() -> None:
+    settings = _test_settings(
+        environment=Environment.STAGING,
+        oidc={"enabled": True, "issuer": "https://auth.example.com/"},
+    )
+    with pytest.raises(ConfigurationError) as exc_info:
+        create_runtime(settings)
+    assert exc_info.value.code == "oidc_misconfigured"
 
 
 def test_load_settings_returns_app_settings(
