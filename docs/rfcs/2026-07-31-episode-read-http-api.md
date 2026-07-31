@@ -156,7 +156,7 @@ See spec §11:
 ```text
 ① Inbox consumer + episode-recorded processor   ✅
 ② Episode read API                               ✅ this slice
-③ OIDC tenant context (actor from JWT, unify read/write auth)
+③ OIDC tenant context (actor from JWT, unify read/write auth)   ✅
 ④ Temporal runtime adapter
 ⑤ Claim extraction processor side effects (Phase 2 entry)
 ```
