@@ -6,12 +6,14 @@ import asyncio
 from types import TracebackType
 from typing import Self, final
 
+from engrammesh.bootstrap.auth.ports import TokenVerifierPort
 from engrammesh.bootstrap.infrastructure import (
-    EnvironmentGatedMemoryAuthorization,
     InboxOutboxEventPublisher,
     LoggingOutboxEventPublisher,
     SystemUtcClock,
     UuidMemoryIdentityPort,
+    create_memory_authorization,
+    create_token_verifier,
 )
 from engrammesh.bootstrap.settings import AppSettings, ConfigurationError
 from engrammesh.modules.memory.adapters.postgres import (
@@ -67,11 +69,13 @@ class AppRuntime:
         "_relay_handler",
         "_settings",
         "_started",
+        "_token_verifier",
         "_unit_of_work_factory",
     )
 
     def __init__(self, settings: AppSettings) -> None:
         self._settings = settings
+        self._token_verifier = create_token_verifier(settings)
         self._database: PostgresMemoryDatabase | None = None
         self._unit_of_work_factory: PostgresMemoryUnitOfWorkFactory | None = None
         self._handler: RecordEpisodeHandler | None = None
@@ -86,6 +90,9 @@ class AppRuntime:
     @property
     def settings(self) -> AppSettings:
         return self._settings
+
+    def token_verifier(self) -> TokenVerifierPort | None:
+        return self._token_verifier
 
     async def check_ready(self) -> None:
         if not self._settings.modules.memory_enabled:
@@ -167,9 +174,7 @@ class AppRuntime:
             raise RuntimeError(msg)
         if self._handler is None:
             self._handler = RecordEpisodeHandler(
-                authorization=EnvironmentGatedMemoryAuthorization(
-                    self._settings.environment
-                ),
+                authorization=create_memory_authorization(self._settings),
                 clock=SystemUtcClock(),
                 identities=UuidMemoryIdentityPort(),
                 unit_of_work_factory=self._unit_of_work_factory,
@@ -185,9 +190,7 @@ class AppRuntime:
             raise RuntimeError(msg)
         if self._get_episode_handler is None:
             self._get_episode_handler = GetEpisodeHandler(
-                authorization=EnvironmentGatedMemoryAuthorization(
-                    self._settings.environment
-                ),
+                authorization=create_memory_authorization(self._settings),
                 unit_of_work_factory=self._unit_of_work_factory,
             )
         return self._get_episode_handler
@@ -201,9 +204,7 @@ class AppRuntime:
             raise RuntimeError(msg)
         if self._list_episodes_handler is None:
             self._list_episodes_handler = ListEpisodesHandler(
-                authorization=EnvironmentGatedMemoryAuthorization(
-                    self._settings.environment
-                ),
+                authorization=create_memory_authorization(self._settings),
                 unit_of_work_factory=self._unit_of_work_factory,
             )
         return self._list_episodes_handler
