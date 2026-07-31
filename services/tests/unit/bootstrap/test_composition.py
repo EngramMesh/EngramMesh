@@ -16,6 +16,8 @@ from engrammesh.bootstrap.settings import (
     Environment,
     ModuleSettings,
 )
+from engrammesh.modules.memory.application.get_episode import GetEpisodeHandler
+from engrammesh.modules.memory.application.list_episodes import ListEpisodesHandler
 from engrammesh.modules.memory.application.record_episode import RecordEpisodeHandler
 from engrammesh.modules.memory.application.relay_outbox import RelayOutboxEventsHandler
 
@@ -131,6 +133,54 @@ async def test_record_episode_handler_returns_cached_handler() -> None:
         second = runtime.record_episode_handler()
         assert isinstance(first, RecordEpisodeHandler)
         assert first is second
+
+
+@pytest.mark.asyncio
+async def test_get_episode_handler_returns_cached_handler() -> None:
+    runtime = create_runtime(_test_settings())
+    with patch(
+        "engrammesh.bootstrap.composition.PostgresMemoryDatabase"
+    ) as database_cls:
+        database_cls.return_value.open = AsyncMock()
+        database_cls.return_value.close = AsyncMock()
+        await runtime.startup()
+        first = runtime.get_episode_handler()
+        second = runtime.get_episode_handler()
+        assert isinstance(first, GetEpisodeHandler)
+        assert first is second
+
+
+def test_get_episode_handler_when_memory_disabled_raises() -> None:
+    runtime = create_runtime(
+        _test_settings(modules=ModuleSettings(memory_enabled=False))
+    )
+    with pytest.raises(ConfigurationError) as exc_info:
+        runtime.get_episode_handler()
+    assert exc_info.value.code == "memory_disabled"
+
+
+@pytest.mark.asyncio
+async def test_list_episodes_handler_returns_cached_handler() -> None:
+    runtime = create_runtime(_test_settings())
+    with patch(
+        "engrammesh.bootstrap.composition.PostgresMemoryDatabase"
+    ) as database_cls:
+        database_cls.return_value.open = AsyncMock()
+        database_cls.return_value.close = AsyncMock()
+        await runtime.startup()
+        first = runtime.list_episodes_handler()
+        second = runtime.list_episodes_handler()
+        assert isinstance(first, ListEpisodesHandler)
+        assert first is second
+
+
+def test_list_episodes_handler_when_memory_disabled_raises() -> None:
+    runtime = create_runtime(
+        _test_settings(modules=ModuleSettings(memory_enabled=False))
+    )
+    with pytest.raises(ConfigurationError) as exc_info:
+        runtime.list_episodes_handler()
+    assert exc_info.value.code == "memory_disabled"
 
 
 def test_relay_outbox_handler_when_memory_disabled_raises() -> None:
