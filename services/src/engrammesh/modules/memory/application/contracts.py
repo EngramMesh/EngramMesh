@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from engrammesh.modules.memory.domain.model import (
+    Episode,
     MemoryScope,
     RetentionClass,
     Sensitivity,
@@ -83,3 +84,34 @@ class ProcessInboxEventResult:
 
     processed: bool
     skipped: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GetEpisodeQuery:
+    actor_id: SubjectId
+    scope: MemoryScope
+    episode_id: MemoryId
+
+
+@dataclass(frozen=True, slots=True)
+class GetEpisodeResult:
+    episode: Episode
+
+
+@dataclass(frozen=True, slots=True)
+class ListEpisodesQuery:
+    actor_id: SubjectId
+    scope: MemoryScope
+    limit: int
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.limit <= 0 or self.limit > 100:
+            msg = "limit must be between 1 and 100"
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True)
+class ListEpisodesResult:
+    items: tuple[Episode, ...]
+    next_cursor: str | None
