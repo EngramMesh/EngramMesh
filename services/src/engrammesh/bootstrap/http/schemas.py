@@ -1,4 +1,4 @@
-"""HTTP transport schemas for episode ingest."""
+"""HTTP transport schemas for episode ingest and read."""
 
 from datetime import datetime
 from uuid import UUID
@@ -45,3 +45,36 @@ class RecordEpisodeResponse(_HttpSchemaModel):
 
     episode_id: str
     created: bool
+
+
+class ScopeResponse(_HttpSchemaModel):
+    """HTTP memory scope in episode read responses."""
+
+    tenant_id: UUID
+    subject_id: UUID
+    workspace_id: str | None = None
+    agent_id: UUID | None = None
+
+
+class EpisodeResponse(_HttpSchemaModel):
+    """HTTP response body for one episode."""
+
+    episode_id: str
+    scope: ScopeResponse
+    actor_id: UUID
+    source_type: SourceType
+    content_ref: UUID
+    observed_at: datetime
+    ingested_at: datetime
+    content_hash: str
+    idempotency_key: str
+    sensitivity: Sensitivity
+    retention_class: RetentionClass
+    consent_basis: str
+
+
+class ListEpisodesResponse(_HttpSchemaModel):
+    """HTTP response body for a paginated episode list."""
+
+    items: tuple[EpisodeResponse, ...]
+    next_cursor: str | None
