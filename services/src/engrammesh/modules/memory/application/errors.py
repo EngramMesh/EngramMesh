@@ -9,3 +9,15 @@ class EpisodeAuthorizationDenied(PermissionError):
 
     def __init__(self) -> None:
         super().__init__()
+
+
+@final
+class EpisodeReadAuthorizationDenied(PermissionError):
+    def __init__(self) -> None:
+        super().__init__()
+
+
+@final
+class EpisodeNotFound(LookupError):
+    def __init__(self) -> None:
+        super().__init__()
