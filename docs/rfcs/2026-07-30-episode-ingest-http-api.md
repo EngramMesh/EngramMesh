@@ -284,9 +284,9 @@ OIDC 切片落地后，HTTP 层将增加 JWT 中间件并将 actor/tenant 注入
 ## 13. 后续切片顺序
 
 ```text
-① Episode Ingest HTTP API          ← 本切片
-② Inbox 消费者 + episode-recorded 处理器
-③ Episode 读取 API
+① Episode Ingest HTTP API          ✅
+② Inbox 消费者 + episode-recorded 处理器   ✅
+③ Episode 读取 API                 ← 进行中（见 RFC 2026-07-31-episode-read-http-api.md）
 ④ OIDC 租户上下文
 ⑤ Temporal Runtime 适配器
 ```

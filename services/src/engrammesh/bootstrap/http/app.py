@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import FastAPI, Header, Query
@@ -73,10 +74,10 @@ def create_app(
     async def get_episode(
         tenant_id: UUID,
         episode_id: UUID,
-        subject_id: UUID = Query(...),
-        actor_id: UUID = Query(...),
-        workspace_id: str | None = Query(default=None),
-        agent_id: UUID | None = Query(default=None),
+        subject_id: Annotated[UUID, Query()],
+        actor_id: Annotated[UUID, Query()],
+        workspace_id: Annotated[str | None, Query()] = None,
+        agent_id: Annotated[UUID | None, Query()] = None,
     ) -> JSONResponse:
         query = to_get_episode_query(
             path_tenant_id=TenantId(tenant_id),
@@ -94,12 +95,12 @@ def create_app(
     @app.get("/v1/tenants/{tenant_id}/episodes")
     async def list_episodes(
         tenant_id: UUID,
-        subject_id: UUID = Query(...),
-        actor_id: UUID = Query(...),
-        workspace_id: str | None = Query(default=None),
-        agent_id: UUID | None = Query(default=None),
-        limit: int = Query(default=50, ge=1, le=100),
-        cursor: str | None = Query(default=None),
+        subject_id: Annotated[UUID, Query()],
+        actor_id: Annotated[UUID, Query()],
+        workspace_id: Annotated[str | None, Query()] = None,
+        agent_id: Annotated[UUID | None, Query()] = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Query()] = None,
     ) -> JSONResponse:
         query = to_list_episodes_query(
             path_tenant_id=TenantId(tenant_id),

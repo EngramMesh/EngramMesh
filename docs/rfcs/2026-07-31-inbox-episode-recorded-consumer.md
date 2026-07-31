@@ -78,8 +78,8 @@ See spec acceptance criteria (7 items).
 ## 7. Follow-up
 
 ```text
-① Inbox consumer + episode-recorded processor   ← this slice
-② Episode read API
+① Inbox consumer + episode-recorded processor   ✅
+② Episode read API                               ← in progress
 ③ OIDC tenant context
 ④ Temporal runtime adapter
 ```

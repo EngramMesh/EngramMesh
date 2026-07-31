@@ -48,6 +48,10 @@ Semantic Versioning after its first public release.
   `inbox.enabled` rollback switch, composed record→relay→inbox integration
   coverage, and bilingual services documentation (delegate vs inbox authority,
   v1 single-consumer `event_id` primary key).
+- Episode read HTTP API: `GET /v1/tenants/{tenant_id}/episodes/{episode_id}` and
+  `GET /v1/tenants/{tenant_id}/episodes` with keyset cursor pagination,
+  `GetEpisodeHandler` / `ListEpisodesHandler`, response JSON Schemas, and
+  integration coverage.
 
 ### Changed
 
