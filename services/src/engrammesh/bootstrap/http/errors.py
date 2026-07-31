@@ -8,6 +8,11 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from starlette.responses import JSONResponse
 
+from engrammesh.bootstrap.auth.errors import (
+    AuthenticationRequiredError,
+    InvalidTokenError,
+    TenantAccessDeniedError,
+)
 from engrammesh.bootstrap.composition import ReadinessError
 from engrammesh.bootstrap.http.mappers import (
     InvalidCorrelationIdError,
@@ -32,6 +37,9 @@ _INVALID_EPISODE_CURSOR_MESSAGE = "episode list cursor is invalid"
 _EPISODE_IDEMPOTENCY_CONFLICT_MESSAGE = (
     "idempotency key conflicts with an existing episode"
 )
+_AUTHENTICATION_REQUIRED_MESSAGE = "authentication is required"
+_INVALID_TOKEN_MESSAGE = "invalid token"
+_TENANT_ACCESS_DENIED_MESSAGE = "tenant access is denied"
 _VALIDATION_ERROR_MESSAGE = "request validation failed"
 _SERVICE_UNAVAILABLE_MESSAGE = "service is unavailable"
 _INTERNAL_ERROR_MESSAGE = "internal server error"
@@ -54,6 +62,42 @@ def error_envelope(
 
 def register_exception_handlers(app: FastAPI) -> None:
     """Register HTTP exception handlers for episode ingest error mapping."""
+
+    @app.exception_handler(AuthenticationRequiredError)
+    async def authentication_required_handler(
+        _request: Request,
+        _exc: AuthenticationRequiredError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=401,
+            content=error_envelope(
+                "authentication_required",
+                _AUTHENTICATION_REQUIRED_MESSAGE,
+            ),
+        )
+
+    @app.exception_handler(InvalidTokenError)
+    async def invalid_token_handler(
+        _request: Request,
+        _exc: InvalidTokenError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=401,
+            content=error_envelope("invalid_token", _INVALID_TOKEN_MESSAGE),
+        )
+
+    @app.exception_handler(TenantAccessDeniedError)
+    async def tenant_access_denied_handler(
+        _request: Request,
+        _exc: TenantAccessDeniedError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=403,
+            content=error_envelope(
+                "tenant_access_denied",
+                _TENANT_ACCESS_DENIED_MESSAGE,
+            ),
+        )
 
     @app.exception_handler(EpisodeAuthorizationDenied)
     async def episode_authorization_denied_handler(
