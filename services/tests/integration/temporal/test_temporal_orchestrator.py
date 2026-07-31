@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
 from typing import Any
 from uuid import UUID
 
@@ -16,6 +18,7 @@ from engrammesh.bootstrap.infrastructure import SystemUtcClock
 from engrammesh.modules.memory.public import MemoryScope
 from engrammesh.modules.runtime.adapters.in_memory.database import (
     InMemoryRuntimeDatabase,
+    _CommittedRuntimeState,
 )
 from engrammesh.modules.runtime.adapters.temporal.activities import (
     advance_to_planning,
@@ -24,6 +27,7 @@ from engrammesh.modules.runtime.adapters.temporal.activities import (
 )
 from engrammesh.modules.runtime.adapters.temporal.orchestrator import (
     TemporalOrchestratorPort,
+    _spec_fingerprint,
 )
 from engrammesh.modules.runtime.adapters.temporal.workflows import (
     ExecutionLifecycleWorkflow,
@@ -307,5 +311,59 @@ async def test_temporal_survives_worker_restart() -> None:
                 target=ExecutionStatus.SUCCEEDED,
                 env=env,
                 timeout_s=30.0,
+            )
+            assert final_status is ExecutionStatus.SUCCEEDED
+
+
+@pytest.mark.temporal
+@pytest.mark.asyncio
+async def test_temporal_recovers_orphaned_index_entry() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        index = InMemoryRuntimeDatabase()
+        orchestrator = TemporalOrchestratorPort(
+            env.client,
+            task_queue=TASK_QUEUE,
+            index=index,
+            clock=SystemUtcClock(),
+        )
+        spec = _spec(execution_id=ExecutionId.new(), key="orphan-recovery")
+        fingerprint = _spec_fingerprint(spec)
+        index_key = (spec.scope.tenant_id, spec.idempotency_key)
+
+        def _seed_orphan(state: _CommittedRuntimeState) -> _CommittedRuntimeState:
+            idempotency_index = dict(state.idempotency_index)
+            idempotency_index[index_key] = spec.id
+            fingerprints = dict(state.fingerprints)
+            fingerprints[spec.id] = fingerprint
+            return replace(
+                state,
+                idempotency_index=MappingProxyType(idempotency_index),
+                fingerprints=MappingProxyType(fingerprints),
+            )
+
+        await index.write(_seed_orphan)
+
+        async with Worker(
+            env.client,
+            task_queue=TASK_QUEUE,
+            workflows=[ExecutionLifecycleWorkflow],
+            activities=[
+                advance_to_planning,
+                advance_to_running,
+                advance_to_succeeded,
+            ],
+        ):
+            started = await orchestrator.start(
+                _spec(execution_id=ExecutionId.new(), key="orphan-recovery")
+            )
+            assert started.execution_id == spec.id
+            assert started.status is ExecutionStatus.PENDING
+
+            final_status = await _poll_until(
+                orchestrator,
+                spec.scope,
+                started.execution_id,
+                target=ExecutionStatus.SUCCEEDED,
+                env=env,
             )
             assert final_status is ExecutionStatus.SUCCEEDED

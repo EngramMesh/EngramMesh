@@ -14,7 +14,10 @@ from engrammesh.modules.runtime.adapters.temporal.activities import (
     advance_to_running,
     advance_to_succeeded,
 )
-from engrammesh.modules.runtime.adapters.temporal.client import connect_temporal_client
+from engrammesh.modules.runtime.adapters.temporal.connection import (
+    TemporalConnectionSettings,
+    connect_temporal_client,
+)
 from engrammesh.modules.runtime.adapters.temporal.workflows import (
     ExecutionLifecycleWorkflow,
 )
@@ -25,7 +28,14 @@ async def run_worker(settings: AppSettings) -> None:
         msg = "Temporal worker requires temporal.enabled"
         raise ConfigurationError("temporal_disabled", msg)
 
-    client = await connect_temporal_client(settings.temporal)
+    temporal = settings.temporal
+    client = await connect_temporal_client(
+        TemporalConnectionSettings(
+            address=temporal.address,
+            namespace=temporal.namespace,
+            tls=temporal.tls,
+        )
+    )
     worker = Worker(
         client,
         task_queue=settings.temporal.task_queue,

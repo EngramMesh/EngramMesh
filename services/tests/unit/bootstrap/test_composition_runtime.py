@@ -12,6 +12,9 @@ from engrammesh.bootstrap.settings import (
 from engrammesh.modules.runtime.adapters.in_memory.orchestrator import (
     InMemoryOrchestratorPort,
 )
+from engrammesh.modules.runtime.adapters.temporal.connection import (
+    TemporalConnectionSettings,
+)
 from engrammesh.modules.runtime.adapters.temporal.orchestrator import (
     TemporalOrchestratorPort,
 )
@@ -106,7 +109,14 @@ async def test_startup_wires_temporal_orchestrator_when_temporal_enabled() -> No
         return_value=client,
     ) as connect_mock:
         await runtime.startup()
-        connect_mock.assert_awaited_once_with(runtime.settings.temporal)
+        temporal = runtime.settings.temporal
+        connect_mock.assert_awaited_once_with(
+            TemporalConnectionSettings(
+                address=temporal.address,
+                namespace=temporal.namespace,
+                tls=temporal.tls,
+            )
+        )
     handler = runtime.start_execution_handler()
     assert isinstance(handler, StartExecutionHandler)
     assert isinstance(handler._orchestrator, TemporalOrchestratorPort)

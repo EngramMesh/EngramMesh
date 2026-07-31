@@ -45,7 +45,10 @@ from engrammesh.modules.runtime.adapters.in_memory.database import (
 from engrammesh.modules.runtime.adapters.in_memory.orchestrator import (
     InMemoryOrchestratorPort,
 )
-from engrammesh.modules.runtime.adapters.temporal.client import connect_temporal_client
+from engrammesh.modules.runtime.adapters.temporal.connection import (
+    TemporalConnectionSettings,
+    connect_temporal_client,
+)
 from engrammesh.modules.runtime.adapters.temporal.orchestrator import (
     TemporalOrchestratorPort,
 )
@@ -158,8 +161,13 @@ class AppRuntime:
         if self._settings.modules.runtime_enabled and self._orchestrator is None:
             self._execution_index = InMemoryRuntimeDatabase()
             if self._settings.temporal.enabled:
+                temporal = self._settings.temporal
                 self._temporal_client = await connect_temporal_client(
-                    self._settings.temporal
+                    TemporalConnectionSettings(
+                        address=temporal.address,
+                        namespace=temporal.namespace,
+                        tls=temporal.tls,
+                    )
                 )
             self._orchestrator = self._create_orchestrator()
 

@@ -132,30 +132,86 @@ class TemporalOrchestratorPort:
         await self._index.write(_register)
         execution_id = start_result["execution_id"]
         assert isinstance(execution_id, ExecutionId)
+        is_new = bool(start_result["is_new"])
 
-        if start_result["is_new"]:
-            wf_id = workflow_id(spec.scope.tenant_id, execution_id)
-            try:
-                await self._client.start_workflow(
-                    ExecutionLifecycleWorkflow.run,
-                    spec_to_payload(spec),
-                    id=wf_id,
-                    task_queue=self._task_queue,
-                )
-            except WorkflowAlreadyStartedError:
-                stored_fingerprint = await self._index.read(
-                    lambda state: state.fingerprints.get(execution_id)
-                )
-                if stored_fingerprint != fingerprint:
-                    raise ExecutionIdempotencyConflict() from None
-            except RPCError as exc:
-                raise OrchestrationUnavailable() from exc
+        if is_new:
+            await self._start_workflow_or_raise(spec, execution_id, rollback=True)
+            return await self._query_snapshot(
+                spec.scope.tenant_id,
+                execution_id,
+                spec.scope,
+            )
 
-        return await self._query_snapshot(
-            spec.scope.tenant_id,
-            execution_id,
-            spec.scope,
+        try:
+            return await self._query_snapshot(
+                spec.scope.tenant_id,
+                execution_id,
+                spec.scope,
+            )
+        except ExecutionNotFound:
+            await self._start_workflow_or_raise(spec, execution_id, rollback=False)
+            return await self._query_snapshot(
+                spec.scope.tenant_id,
+                execution_id,
+                spec.scope,
+            )
+
+    async def _start_workflow_or_raise(
+        self,
+        spec: ExecutionSpec,
+        execution_id: ExecutionId,
+        *,
+        rollback: bool,
+    ) -> None:
+        wf_id = workflow_id(spec.scope.tenant_id, execution_id)
+        fingerprint = _spec_fingerprint(spec)
+        workflow_spec = (
+            spec if spec.id == execution_id else replace(spec, id=execution_id)
         )
+        try:
+            await self._client.start_workflow(
+                ExecutionLifecycleWorkflow.run,
+                spec_to_payload(workflow_spec),
+                id=wf_id,
+                task_queue=self._task_queue,
+            )
+        except WorkflowAlreadyStartedError:
+            stored_fingerprint = await self._index.read(
+                lambda state: state.fingerprints.get(execution_id)
+            )
+            if stored_fingerprint != fingerprint:
+                raise ExecutionIdempotencyConflict() from None
+        except RPCError as exc:
+            if rollback:
+                await self._rollback_start_registration(
+                    spec.scope.tenant_id,
+                    spec.idempotency_key,
+                    execution_id,
+                )
+            raise OrchestrationUnavailable() from exc
+
+    async def _rollback_start_registration(
+        self,
+        tenant_id: TenantId,
+        idempotency_key: str,
+        execution_id: ExecutionId,
+    ) -> None:
+        index_key = (tenant_id, idempotency_key)
+
+        def _rollback(state: _CommittedRuntimeState) -> _CommittedRuntimeState:
+            if state.idempotency_index.get(index_key) != execution_id:
+                return state
+            idempotency_index = dict(state.idempotency_index)
+            idempotency_index.pop(index_key, None)
+            fingerprints = dict(state.fingerprints)
+            fingerprints.pop(execution_id, None)
+            return replace(
+                state,
+                idempotency_index=MappingProxyType(idempotency_index),
+                fingerprints=MappingProxyType(fingerprints),
+            )
+
+        await self._index.write(_rollback)
 
     async def get_snapshot(
         self,
