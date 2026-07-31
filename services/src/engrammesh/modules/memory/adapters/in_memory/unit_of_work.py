@@ -7,6 +7,7 @@ from engrammesh.modules.memory.adapters.in_memory.database import (
     InMemoryMemoryDatabase,
     _CommittedMemoryState,
 )
+from engrammesh.modules.memory.domain.episode_cursor import decode_episode_cursor
 from engrammesh.modules.memory.domain.errors import EpisodeIdempotencyConflict
 from engrammesh.modules.memory.domain.model import Claim, Episode, MemoryScope
 from engrammesh.modules.memory.ports import (
@@ -25,7 +26,6 @@ _NOT_ACTIVE = "memory transaction is not active"
 _ALREADY_ENTERED = "memory transaction cannot be entered more than once"
 _ALREADY_COMMITTED = "memory transaction has already been committed"
 _CLAIMS_UNAVAILABLE = "in-memory claim store is unavailable"
-_CURSORS_UNAVAILABLE = "in-memory episode cursors are unavailable"
 _EPISODE_RECORDED = "memory.episode-recorded"
 _EVENT_AGGREGATE_UNKNOWN = "outbox episode event aggregate is unknown"
 _EVENT_TENANT_MISMATCH = "outbox event tenant does not match episode tenant"
@@ -114,16 +114,32 @@ class _InMemoryEpisodeStore:
     async def stream(
         self,
         scope: MemoryScope,
+        *,
+        limit: int | None = None,
         cursor: str | None = None,
     ) -> tuple[Episode, ...]:
         self._state.require_usable()
-        if cursor is not None:
-            raise ValueError(_CURSORS_UNAVAILABLE)
-        return tuple(
-            episode
-            for episode in self._state.episodes
-            if episode.scope == scope
+        if cursor is not None and limit is None:
+            msg = "cursor requires limit"
+            raise ValueError(msg)
+        if limit is not None and limit <= 0:
+            msg = "limit must be positive"
+            raise ValueError(msg)
+        rows = sorted(
+            (episode for episode in self._state.episodes if episode.scope == scope),
+            key=lambda episode: (episode.ingested_at, episode.id.value),
         )
+        if cursor is not None:
+            cursor_at, cursor_id = decode_episode_cursor(cursor)
+            rows = [
+                episode
+                for episode in rows
+                if (episode.ingested_at, episode.id.value)
+                > (cursor_at, cursor_id.value)
+            ]
+        if limit is not None:
+            return tuple(rows[:limit])
+        return tuple(rows)
 
 
 @final

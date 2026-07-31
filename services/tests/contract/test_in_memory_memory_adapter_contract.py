@@ -109,7 +109,7 @@ def test_contract_registries_are_separate_and_complete() -> None:
     )
     assert capability_names == (
         "claims_unavailable",
-        "cursor_rejection",
+        "cursor_pagination",
         "cancel_while_queued",
     )
     assert set(episode_names).isdisjoint(capability_names)

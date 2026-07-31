@@ -12,6 +12,7 @@ from engrammesh.modules.memory.adapters import (
     InMemoryMemoryDatabase,
     InMemoryMemoryUnitOfWorkFactory,
 )
+from engrammesh.modules.memory.domain.episode_cursor import encode_episode_cursor
 from engrammesh.modules.memory.domain.model import (
     Episode,
     MemoryScope,
@@ -281,11 +282,32 @@ async def test_get_and_stream_require_the_exact_memory_scope() -> None:
             is None
         )
         assert await unit_of_work.episodes.stream(scope) == (first, second)
-        with pytest.raises(
-            ValueError,
-            match="in-memory episode cursors are unavailable",
-        ):
+        with pytest.raises(ValueError, match="cursor requires limit"):
             await unit_of_work.episodes.stream(scope, cursor="next")
+
+
+@pytest.mark.asyncio
+async def test_stream_paginates_with_cursor() -> None:
+    database = InMemoryMemoryDatabase()
+    factory = InMemoryMemoryUnitOfWorkFactory(database)
+    scope = make_scope()
+    episodes = [make_episode(index) for index in range(3)]
+    async with factory.create() as unit_of_work:
+        for episode in episodes:
+            await unit_of_work.episodes.append(episode)
+        await unit_of_work.commit()
+    async with factory.create() as unit_of_work:
+        first_page = await unit_of_work.episodes.stream(scope, limit=2)
+        assert len(first_page) == 2
+        cursor = encode_episode_cursor(
+            ingested_at=first_page[-1].ingested_at,
+            episode_id=first_page[-1].id,
+        )
+        second_page = await unit_of_work.episodes.stream(
+            scope, limit=2, cursor=cursor
+        )
+        assert len(second_page) == 1
+        assert second_page[0].id == episodes[2].id
 
 
 @pytest.mark.asyncio
