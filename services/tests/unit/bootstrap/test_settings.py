@@ -11,6 +11,7 @@ from engrammesh.bootstrap.settings import (
     HttpSettings,
     InboxSettings,
     ModuleSettings,
+    OidcSettings,
     OutboxRelaySettings,
     PostgresSettings,
     TelemetrySettings,
@@ -25,6 +26,15 @@ EXPECTED_MODEL_FIELDS: Mapping[type[object], tuple[str, ...]] = {
     HttpSettings: ("enabled", "host", "port"),
     OutboxRelaySettings: ("enabled", "batch_size", "poll_interval_seconds"),
     InboxSettings: ("enabled", "consumer_name"),
+    OidcSettings: (
+        "enabled",
+        "issuer",
+        "jwks_uri",
+        "audience",
+        "actor_claim",
+        "tenant_claim",
+        "dev_signing_key",
+    ),
     AppSettings: (
         "configuration_schema_version",
         "environment",
@@ -35,6 +45,7 @@ EXPECTED_MODEL_FIELDS: Mapping[type[object], tuple[str, ...]] = {
         "http",
         "inbox",
         "outbox_relay",
+        "oidc",
     ),
 }
 

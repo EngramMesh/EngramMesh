@@ -140,6 +140,18 @@ class OutboxRelaySettings(_FrozenSettingsModel):
         return value
 
 
+class OidcSettings(_FrozenSettingsModel):
+    """OIDC JWT verification boundary."""
+
+    enabled: bool = False
+    issuer: str = ""
+    jwks_uri: str = ""
+    audience: str | None = None
+    actor_claim: str = "sub"
+    tenant_claim: str = "tenant_id"
+    dev_signing_key: str | None = None
+
+
 class AppSettings(BaseSettings):
     """Immutable application configuration assembled from trusted sources."""
 
@@ -160,6 +172,7 @@ class AppSettings(BaseSettings):
     http: HttpSettings = HttpSettings()
     inbox: InboxSettings = InboxSettings()
     outbox_relay: OutboxRelaySettings = OutboxRelaySettings()
+    oidc: OidcSettings = OidcSettings()
 
     @model_validator(mode="after")
     def validate_production_security(self) -> Self:
@@ -187,5 +200,16 @@ class AppSettings(BaseSettings):
         if not self.temporal.tls:
             msg = "production requires Temporal TLS"
             raise ConfigurationError("insecure_temporal_tls", msg)
+
+        if self.oidc.enabled:
+            if not self.oidc.issuer.strip():
+                msg = "production requires OIDC issuer when OIDC is enabled"
+                raise ConfigurationError("oidc_issuer_required", msg)
+            if not self.oidc.jwks_uri.strip():
+                msg = "production requires OIDC JWKS URI when OIDC is enabled"
+                raise ConfigurationError("oidc_jwks_uri_required", msg)
+            if self.oidc.dev_signing_key is not None:
+                msg = "production must not configure OIDC dev_signing_key"
+                raise ConfigurationError("oidc_dev_key_forbidden", msg)
 
         return self
