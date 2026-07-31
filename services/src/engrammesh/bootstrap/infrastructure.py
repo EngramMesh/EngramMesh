@@ -6,11 +6,16 @@ from datetime import UTC, datetime
 from typing import final
 from uuid import uuid4
 
-from engrammesh.bootstrap.settings import Environment
+from engrammesh.bootstrap.auth.context import current_principal
+from engrammesh.bootstrap.settings import AppSettings, Environment
 from engrammesh.modules.memory.application.process_inbox_event import (
     ProcessInboxEventHandler,
 )
-from engrammesh.modules.memory.ports import AuthorizationRequest, OutboxEventPublisher
+from engrammesh.modules.memory.ports import (
+    AuthorizationRequest,
+    MemoryAuthorizationPort,
+    OutboxEventPublisher,
+)
 from engrammesh.shared.kernel.events import EventEnvelope
 from engrammesh.shared.kernel.ids import EventId, MemoryId
 
@@ -80,3 +85,19 @@ class EnvironmentGatedMemoryAuthorization:
             Environment.DEVELOPMENT,
             Environment.TEST,
         }
+
+
+@final
+class TenantScopedMemoryAuthorization:
+    async def authorize(self, request: AuthorizationRequest) -> bool:
+        principal = current_principal()
+        return (
+            request.actor_id == principal.actor_id
+            and request.scope.tenant_id == principal.tenant_id
+        )
+
+
+def create_memory_authorization(settings: AppSettings) -> MemoryAuthorizationPort:
+    if settings.oidc.enabled:
+        return TenantScopedMemoryAuthorization()
+    return EnvironmentGatedMemoryAuthorization(settings.environment)
