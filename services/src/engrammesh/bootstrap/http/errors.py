@@ -15,6 +15,8 @@ from engrammesh.bootstrap.auth.errors import (
 )
 from engrammesh.bootstrap.composition import ReadinessError
 from engrammesh.bootstrap.http.mappers import (
+    ActorIdNotAllowedError,
+    ActorIdRequiredError,
     InvalidCorrelationIdError,
     LimitOutOfRangeError,
     TenantMismatchError,
@@ -162,6 +164,26 @@ def register_exception_handlers(app: FastAPI) -> None:
                 "episode_idempotency_conflict",
                 _EPISODE_IDEMPOTENCY_CONFLICT_MESSAGE,
             ),
+        )
+
+    @app.exception_handler(ActorIdNotAllowedError)
+    async def actor_id_not_allowed_handler(
+        _request: Request,
+        exc: ActorIdNotAllowedError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content=error_envelope("actor_id_not_allowed", str(exc)),
+        )
+
+    @app.exception_handler(ActorIdRequiredError)
+    async def actor_id_required_handler(
+        _request: Request,
+        exc: ActorIdRequiredError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content=error_envelope("actor_id_required", str(exc)),
         )
 
     @app.exception_handler(TenantMismatchError)

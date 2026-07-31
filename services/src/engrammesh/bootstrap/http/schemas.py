@@ -28,7 +28,7 @@ class ScopeRequest(_HttpSchemaModel):
 class RecordEpisodeRequest(_HttpSchemaModel):
     """HTTP request body for recording one episode."""
 
-    actor_id: UUID
+    actor_id: UUID | None = None
     scope: ScopeRequest
     source_type: SourceType
     content_ref: UUID

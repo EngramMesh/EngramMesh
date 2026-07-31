@@ -2,6 +2,7 @@
 
 from uuid import UUID
 
+from engrammesh.bootstrap.auth.ports import AuthenticatedPrincipal
 from engrammesh.bootstrap.http.schemas import (
     EpisodeResponse,
     RecordEpisodeRequest,
@@ -37,6 +38,43 @@ class LimitOutOfRangeError(ValueError):
     """HTTP list limit outside allowed bounds."""
 
 
+class ActorIdNotAllowedError(ValueError):
+    """actor_id must not be supplied when a principal is authenticated."""
+
+
+class ActorIdRequiredError(ValueError):
+    """actor_id is required when no principal is authenticated."""
+
+
+def _resolve_actor_id(
+    *,
+    principal: AuthenticatedPrincipal | None,
+    body_or_query_actor_id: UUID | None,
+) -> SubjectId:
+    """Resolve actor_id from JWT principal or explicit request value."""
+    if principal is not None:
+        if body_or_query_actor_id is not None:
+            raise ActorIdNotAllowedError(
+                "actor_id must not be provided when authenticated"
+            )
+        return principal.actor_id
+    if body_or_query_actor_id is None:
+        raise ActorIdRequiredError("actor_id is required when not authenticated")
+    return SubjectId(body_or_query_actor_id)
+
+
+def resolve_query_actor_id(
+    *,
+    principal: AuthenticatedPrincipal | None,
+    query_actor_id: UUID | None,
+) -> SubjectId:
+    """Resolve actor_id for episode read query parameters."""
+    return _resolve_actor_id(
+        principal=principal,
+        body_or_query_actor_id=query_actor_id,
+    )
+
+
 def parse_correlation_id(header_value: str | None) -> CorrelationId:
     """Parse or generate a correlation identifier from an HTTP header value."""
     if header_value is None:
@@ -52,15 +90,20 @@ def to_command(
     path_tenant_id: TenantId,
     correlation_id: CorrelationId,
     body: RecordEpisodeRequest,
+    principal: AuthenticatedPrincipal | None = None,
 ) -> RecordEpisodeCommand:
     """Map an HTTP request body to a record-episode application command."""
     if body.scope.tenant_id != path_tenant_id.value:
         raise TenantMismatchError(
             "path tenant_id does not match body scope.tenant_id"
         )
+    actor_id = _resolve_actor_id(
+        principal=principal,
+        body_or_query_actor_id=body.actor_id,
+    )
     return RecordEpisodeCommand(
         correlation_id=correlation_id,
-        actor_id=SubjectId(body.actor_id),
+        actor_id=actor_id,
         scope=MemoryScope(
             tenant_id=path_tenant_id,
             subject_id=SubjectId(body.scope.subject_id),
@@ -121,14 +164,19 @@ def to_get_episode_query(
     *,
     path_tenant_id: TenantId,
     episode_id: MemoryId,
-    actor_id: SubjectId,
+    actor_id: SubjectId | None = None,
     subject_id: SubjectId,
     workspace_id: str | None,
     agent_id: AgentInstanceId | None,
+    principal: AuthenticatedPrincipal | None = None,
 ) -> GetEpisodeQuery:
     """Map HTTP path and query parameters to a get-episode application query."""
+    resolved_actor_id = _resolve_actor_id(
+        principal=principal,
+        body_or_query_actor_id=actor_id.value if actor_id is not None else None,
+    )
     return GetEpisodeQuery(
-        actor_id=actor_id,
+        actor_id=resolved_actor_id,
         scope=MemoryScope(
             tenant_id=path_tenant_id,
             subject_id=subject_id,
@@ -142,18 +190,23 @@ def to_get_episode_query(
 def to_list_episodes_query(
     *,
     path_tenant_id: TenantId,
-    actor_id: SubjectId,
+    actor_id: SubjectId | None = None,
     subject_id: SubjectId,
     workspace_id: str | None,
     agent_id: AgentInstanceId | None,
     limit: int,
     cursor: str | None,
+    principal: AuthenticatedPrincipal | None = None,
 ) -> ListEpisodesQuery:
     """Map HTTP path and query parameters to a list-episodes application query."""
     if limit < 1 or limit > 100:
         raise LimitOutOfRangeError("limit must be between 1 and 100")
+    resolved_actor_id = _resolve_actor_id(
+        principal=principal,
+        body_or_query_actor_id=actor_id.value if actor_id is not None else None,
+    )
     return ListEpisodesQuery(
-        actor_id=actor_id,
+        actor_id=resolved_actor_id,
         scope=MemoryScope(
             tenant_id=path_tenant_id,
             subject_id=subject_id,
