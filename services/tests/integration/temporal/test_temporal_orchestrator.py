@@ -18,7 +18,6 @@ from engrammesh.bootstrap.infrastructure import SystemUtcClock
 from engrammesh.modules.memory.public import MemoryScope
 from engrammesh.modules.runtime.adapters.in_memory.database import (
     InMemoryRuntimeDatabase,
-    _CommittedRuntimeState,
 )
 from engrammesh.modules.runtime.adapters.temporal.activities import (
     advance_to_planning,
@@ -38,6 +37,7 @@ from engrammesh.modules.runtime.domain.model import (
     ExecutionSpec,
     ExecutionStatus,
 )
+from engrammesh.modules.runtime.runtime_state import CommittedRuntimeState
 from engrammesh.shared.kernel.ids import (
     AgentDefinitionId,
     ArtifactId,
@@ -330,7 +330,7 @@ async def test_temporal_recovers_orphaned_index_entry() -> None:
         fingerprint = _spec_fingerprint(spec)
         index_key = (spec.scope.tenant_id, spec.idempotency_key)
 
-        def _seed_orphan(state: _CommittedRuntimeState) -> _CommittedRuntimeState:
+        def _seed_orphan(state: CommittedRuntimeState) -> CommittedRuntimeState:
             idempotency_index = dict(state.idempotency_index)
             idempotency_index[index_key] = spec.id
             fingerprints = dict(state.fingerprints)

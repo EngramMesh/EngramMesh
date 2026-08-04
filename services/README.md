@@ -13,9 +13,9 @@ PostgreSQL-backed memory handlers and runtime orchestration from settings,
 versioned JSON Schema event contracts, and transactional in-memory adapters for
 test and development use.
 
-It does **not** contain a PostgreSQL execution snapshot store, external event
-dispatcher, dependency-injection framework, model or tool integration,
-projection pipeline, or deployable product feature. A minimal HTTP control API
+It does **not** contain an external event dispatcher, dependency-injection
+framework, model or tool integration, projection pipeline, runtime Outbox
+events, or deployable product feature beyond the tested slices below. A minimal HTTP control API
 exposes Episode ingest, episode read, execution start/snapshot/cancel, health
 probes, and optional OIDC Bearer JWT authentication; production hardening
 remains follow-up work.
@@ -46,8 +46,10 @@ services/
 │   │   │   ├── ports.py      # implementation-neutral boundaries
 │   │   │   └── public.py     # cross-module public contract
 │   │   └── runtime/
-│   │       ├── adapters/     # in-memory and Temporal orchestrator adapters
-│   │       │   ├── in_memory/  # ExecutionIndex + InMemoryOrchestratorPort
+│   │       ├── adapters/     # in-memory, PostgreSQL, and Temporal adapters
+│   │       │   ├── in_memory/  # InMemoryRuntimeDatabase + InMemoryOrchestratorPort
+│   │       │   ├── postgres/   # PostgresRuntimeDatabase (psycopg)
+│   │       │   ├── shared/     # snapshot_codec shared by postgres and temporal
 │   │       │   └── temporal/   # TemporalOrchestratorPort, workflow, activities
 │   │       ├── application/  # framework-neutral execution orchestration
 │   │       ├── domain/       # pure durable-execution values and transitions
@@ -96,6 +98,11 @@ code must never depend outward on a concrete adapter.
   append-only events, and durable structured snapshots. The PostgreSQL Episode
   adapter in this slice implements Episode ingest persistence; broader memory
   surfaces and row-level security policies remain follow-up work.
+- PostgreSQL is also the authority for runtime start idempotency and execution
+  spec fingerprints for both orchestrators. When `temporal.enabled=false`, full
+  execution snapshots are authoritative in PostgreSQL as well; when Temporal is
+  enabled, workflow queries remain the snapshot authority while PostgreSQL
+  retains idempotency only.
 - Temporal Event History is the future authority for execution lifecycle,
   timers, retries, and durable workflow progress.
 - Object storage is the future authority for large content addressed by
@@ -318,18 +325,60 @@ Accessors: `start_execution_handler()`, `get_execution_snapshot_handler()`,
 `cancel_execution_handler()`. When `modules.runtime_enabled` is `False`, each
 raises `ConfigurationError` with code `runtime_disabled`.
 
-### ExecutionIndex and workflow identity
+### Runtime storage
 
-`AppRuntime` owns a **singleton** `InMemoryRuntimeDatabase` (alias
-`ExecutionIndex`) for the process lifetime. The index maps
-`(tenant_id, idempotency_key) → execution_id` and stores full snapshots when the
-in-memory orchestrator is active.
+`RuntimeDatabasePort` is the committed-runtime boundary for orchestrators. It
+exposes callback-based `read` / `write` over immutable `CommittedRuntimeState`
+(`modules/runtime/runtime_state.py`): execution snapshots, a tenant-scoped
+idempotency index, and spec fingerprints. Concrete adapters are
+`InMemoryRuntimeDatabase` (unit tests and mocked composition) and
+`PostgresRuntimeDatabase` (production).
+
+```python
+from engrammesh.modules.runtime.adapters.postgres import PostgresRuntimeDatabase
+```
+
+Import PostgreSQL runtime types from
+`engrammesh.modules.memory.adapters.postgres` for memory and
+`engrammesh.modules.runtime.adapters.postgres` for runtime. Only those adapter
+packages may import `psycopg`. Snapshot JSON encoding lives in
+`adapters/shared/snapshot_codec.py` and is shared by the PostgreSQL and
+Temporal adapters; the PostgreSQL adapter does not import Temporal.
+
+**Composition selection** (`bootstrap/composition.py`):
+
+| Condition | Runtime database | Notes |
+|-----------|------------------|-------|
+| Memory pool live (`PostgresMemoryDatabase` opened) | `PostgresRuntimeDatabase` | Shared `postgres.dsn`, **separate** async connection pool |
+| `runtime_enabled` and memory disabled | none | `ConfigurationError` `runtime_storage_unconfigured` |
+| Unit tests with mocked memory DB | `InMemoryRuntimeDatabase` | Process-local fallback |
+
+Memory and runtime pools use the same DSN but open independently; closing one
+does not close the other.
+
+**PostgreSQL tables** (migration `001_runtime_execution_store.sql`):
+
+| Table | Purpose |
+|-------|---------|
+| `runtime_start_idempotency` | `(tenant_id, idempotency_key) → execution_id` + fingerprint JSONB |
+| `runtime_execution_snapshots` | Full snapshot JSONB plus denormalized scope/status columns |
+| `runtime_schema_migrations` | Versioned runtime schema applicator state |
+
+Portable runtime database assertions live in `RUNTIME_DATABASE_CONTRACTS`
+(`tests/contract/runtime_database_contract.py`); in-memory and PostgreSQL
+harnesses bind without changing assertion bodies.
+
+### Workflow identity
+
+Both orchestrators share one `RuntimeDatabasePort` instance per `AppRuntime`
+lifetime. Start idempotency and fingerprints persist through that port before
+`start_workflow`; exact replays describe the existing workflow instead of
+creating a new one.
 
 **Workflow ID scheme:** `{tenant_id}:{execution_id}`. Both
 `InMemoryOrchestratorPort` and `TemporalOrchestratorPort` use this format.
 `get_snapshot` resolves workflows by tenant and execution id without a reverse
-index. Start idempotency uses `ExecutionIndex` before `start_workflow`; replay
-describes the existing workflow instead of creating a new one.
+index.
 
 `StartExecutionHandler` infers `created` by comparing the returned snapshot's
 `execution_id` to the newly generated id: first call → `created=True`; exact
@@ -350,17 +399,19 @@ memory is disabled.
 
 | Concern | `temporal.enabled=false` | `temporal.enabled=true` |
 |---------|--------------------------|-------------------------|
-| Snapshot authority | `ExecutionIndex` (process-local) | Temporal workflow query `current_snapshot` |
-| Durability | None (process-local) | Temporal Event History |
+| PostgreSQL stores | idempotency + fingerprints + snapshots | idempotency + fingerprints only |
+| Snapshot authority | PostgreSQL (`runtime_execution_snapshots`) | Temporal workflow query `current_snapshot` |
+| Durability | PostgreSQL | Temporal Event History (+ PG idempotency) |
 | Worker | Not required | `bootstrap/worker.py` on configured task queue |
 | SDK boundary | N/A | `temporalio` only in `adapters/temporal/` and `worker.py` |
 
 `InMemoryOrchestratorPort` implements the full `OrchestratorPort` contract
 including idempotency fingerprints, tenant-scoped reads, and cancel state
-transitions. `TemporalOrchestratorPort` shares the same `ExecutionIndex` for
-start idempotency and delegates lifecycle to `ExecutionLifecycleWorkflow` with
-stub activities (`advance_to_planning`, `advance_to_running`,
-`advance_to_succeeded`). SDK errors wrap as `OrchestrationUnavailable`.
+transitions; snapshots commit through `RuntimeDatabasePort`. `TemporalOrchestratorPort`
+shares the same port for start idempotency and delegates lifecycle to
+`ExecutionLifecycleWorkflow` with stub activities (`advance_to_planning`,
+`advance_to_running`, `advance_to_succeeded`). SDK errors wrap as
+`OrchestrationUnavailable`.
 
 Portable orchestrator assertions live in `ORCHESTRATOR_PORT_CONTRACTS`
 (`tests/contract/orchestrator_adapter_contract.py`); the in-memory adapter
@@ -404,11 +455,14 @@ completion, idempotent start replay, cancel, and worker-restart recovery.
 
 This slice deliberately excludes:
 
-- PostgreSQL execution snapshot store and runtime Outbox events (Slice 4 — follow-up ④b)
+- Runtime Outbox events and execution lifecycle event publication (follow-up ④c)
+- Execution list HTTP API (follow-up ④d)
+- Temporal → PostgreSQL snapshot projection (follow-up ④e)
 - LangGraph, PlannerPort, AgentEnginePort, full Plan DAG execution
 - Claim extraction (Phase 2)
 
-See `docs/rfcs/2026-07-31-temporal-runtime-adapter.md` and
+See `docs/rfcs/2026-08-04-execution-snapshot-store.md`,
+`docs/rfcs/2026-07-31-temporal-runtime-adapter.md`, and
 `docs/superpowers/specs/2026-07-31-temporal-runtime-adapter-design.md`.
 
 ## Outbox Relay

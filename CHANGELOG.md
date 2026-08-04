@@ -63,6 +63,12 @@ Semantic Versioning after its first public release.
   (`bootstrap/worker.py`), contract and integration coverage (including
   `@pytest.mark.temporal`), and bilingual services documentation for runtime
   enablement and Temporal settings.
+- PostgreSQL runtime database: `RuntimeDatabasePort`, `CommittedRuntimeState`,
+  `PostgresRuntimeDatabase` with versioned `runtime_*` SQL migrations, shared
+  `snapshot_codec`, composition-root wiring (shared DSN, separate pools),
+  `RUNTIME_DATABASE_CONTRACTS`, postgres integration and composed handler E2E
+  tests, architecture import-boundary tests, and bilingual services documentation
+  for runtime storage selection and Temporal split.
 - Execution HTTP API: `POST/GET /v1/tenants/{tenant_id}/executions`,
   `POST .../cancel`, OIDC runtime authorization (`TenantScopedRuntimeAuthorization`),
   JSON Schema contracts (`packages/contracts/jsonschema/runtime/v1/`), structured
