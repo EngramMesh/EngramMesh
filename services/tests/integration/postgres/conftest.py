@@ -10,6 +10,9 @@ import pytest
 from psycopg import Connection
 
 from engrammesh.modules.memory.adapters.postgres.migrations import apply_migrations
+from engrammesh.modules.runtime.adapters.postgres.migrations import (
+    apply_runtime_migrations,
+)
 
 POSTGRES_DSN_ENV = "ENGRAMMESH__POSTGRES__DSN"
 
@@ -18,6 +21,8 @@ _DATA_TABLES = (
     "memory_outbox_events",
     "memory_episode_idempotency",
     "memory_episodes",
+    "runtime_execution_snapshots",
+    "runtime_start_idempotency",
 )
 
 
@@ -37,6 +42,7 @@ def postgres_dsn() -> str:
 def postgres_connection(postgres_dsn: str) -> Iterator[Connection]:
     with psycopg.connect(postgres_dsn) as connection:
         apply_migrations(connection)
+        apply_runtime_migrations(connection)
         yield connection
         with connection.transaction():
             connection.execute(
