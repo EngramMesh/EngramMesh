@@ -1,14 +1,20 @@
-"""HTTP transport schemas for episode ingest and read."""
+"""HTTP transport schemas for episode ingest, read, and execution."""
 
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from engrammesh.modules.memory.domain.model import (
     RetentionClass,
     Sensitivity,
     SourceType,
+)
+from engrammesh.modules.runtime.domain.model import (
+    ExecutionStatus,
+    FailureCategory,
+    NodeStatus,
+    SuspensionKind,
 )
 
 
@@ -78,3 +84,103 @@ class ListEpisodesResponse(_HttpSchemaModel):
 
     items: tuple[EpisodeResponse, ...]
     next_cursor: str | None
+
+
+def _require_non_blank(value: str, field_name: str) -> str:
+    if not value.strip():
+        msg = f"{field_name} must not be blank"
+        raise ValueError(msg)
+    return value
+
+
+class BudgetRequest(_HttpSchemaModel):
+    """HTTP request body for execution budget limits."""
+
+    max_input_tokens: int = Field(ge=0)
+    max_output_tokens: int = Field(ge=0)
+    max_cost_micros: int = Field(ge=0)
+    deadline: datetime
+
+
+class MemoryQueryRequest(_HttpSchemaModel):
+    """HTTP request body for optional execution memory context."""
+
+    query_id: str
+    scope: ScopeRequest
+    text: str
+    valid_at: datetime | None = None
+    recorded_at: datetime | None = None
+    limit: int = Field(default=10, gt=0)
+
+
+class StartExecutionRequest(_HttpSchemaModel):
+    """HTTP request body for starting one durable execution."""
+
+    actor_id: UUID | None = None
+    scope: ScopeRequest
+    objective_ref: UUID
+    root_agent_id: UUID
+    memory_query: MemoryQueryRequest | None = None
+    budget: BudgetRequest
+    idempotency_key: str
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def _validate_idempotency_key(cls, value: str) -> str:
+        return _require_non_blank(value, "idempotency_key")
+
+
+class CancelExecutionRequest(_HttpSchemaModel):
+    """HTTP request body for cancelling one durable execution."""
+
+    actor_id: UUID | None = None
+    scope: ScopeRequest
+    idempotency_key: str
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def _validate_idempotency_key(cls, value: str) -> str:
+        return _require_non_blank(value, "idempotency_key")
+
+
+class FailureResponse(_HttpSchemaModel):
+    """HTTP response body for a classified execution failure."""
+
+    category: FailureCategory
+    code: str
+    message: str
+    details_ref: UUID | None = None
+
+
+class SuspensionResponse(_HttpSchemaModel):
+    """HTTP response body for a durable execution suspension."""
+
+    request_id: str
+    idempotency_key: str
+    execution_id: UUID
+    node_id: UUID | None = None
+    kind: SuspensionKind
+    request_ref: UUID
+    requested_at: datetime
+    expires_at: datetime
+
+
+class ExecutionSnapshotResponse(_HttpSchemaModel):
+    """HTTP response body for one durable execution snapshot."""
+
+    execution_id: UUID
+    scope: ScopeResponse
+    revision: int
+    status: ExecutionStatus
+    plan_revision: int | None = None
+    node_statuses: dict[str, NodeStatus]
+    suspension: SuspensionResponse | None = None
+    result_ref: UUID | None = None
+    failure: FailureResponse | None = None
+    updated_at: datetime
+
+
+class StartExecutionResponse(ExecutionSnapshotResponse):
+    """HTTP response body for a started or replayed execution."""
+
+    created: bool
