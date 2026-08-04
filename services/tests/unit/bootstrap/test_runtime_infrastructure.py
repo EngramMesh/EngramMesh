@@ -60,3 +60,22 @@ def test_create_runtime_authorization_uses_environment_gate() -> None:
     )
     auth = create_runtime_authorization(settings)
     assert isinstance(auth, EnvironmentGatedRuntimeAuthorization)
+
+
+def test_create_runtime_authorization_uses_tenant_scoped_when_oidc_enabled() -> None:
+    settings = AppSettings.model_validate(
+        {
+            "environment": "test",
+            "postgres": {"dsn": "postgresql://u:p@localhost/db"},
+            "temporal": {"namespace": "ns", "task_queue": "q"},
+            "oidc": {
+                "enabled": True,
+                "issuer": "https://dev.engrammesh.test",
+                "dev_signing_key": "dev-only-signing-key-not-for-production",
+            },
+        }
+    )
+    from engrammesh.bootstrap.infrastructure import TenantScopedRuntimeAuthorization
+
+    auth = create_runtime_authorization(settings)
+    assert isinstance(auth, TenantScopedRuntimeAuthorization)

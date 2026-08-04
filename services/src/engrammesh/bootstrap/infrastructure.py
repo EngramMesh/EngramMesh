@@ -128,12 +128,24 @@ class EnvironmentGatedRuntimeAuthorization:
 
 
 @final
+class TenantScopedRuntimeAuthorization:
+    async def authorize(self, request: RuntimeAuthorizationRequest) -> bool:
+        principal = current_principal()
+        return (
+            request.actor_id == principal.actor_id
+            and request.scope.tenant_id == principal.tenant_id
+        )
+
+
+@final
 class UuidRuntimeIdentityPort:
     async def new_execution_id(self) -> ExecutionId:
         return ExecutionId(uuid4())
 
 
 def create_runtime_authorization(settings: AppSettings) -> RuntimeAuthorizationPort:
+    if settings.oidc.enabled:
+        return TenantScopedRuntimeAuthorization()
     return EnvironmentGatedRuntimeAuthorization(settings.environment)
 
 
