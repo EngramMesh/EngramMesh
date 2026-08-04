@@ -115,6 +115,22 @@ async def test_post_start_idempotency_conflict_returns_409(
 
 
 @pytest.mark.asyncio
+async def test_post_start_naive_deadline_returns_422(client: httpx.AsyncClient) -> None:
+    payload = make_start_execution_payload()
+    payload["budget"] = {
+        **payload["budget"],  # type: ignore[dict-item]
+        "deadline": "2026-08-04T12:00:00",
+    }
+    response = await client.post(
+        f"/v1/tenants/{TENANT_A}/executions",
+        json=payload,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+
+
+@pytest.mark.asyncio
 async def test_post_start_invalid_correlation_id_returns_422(
     client: httpx.AsyncClient,
 ) -> None:
