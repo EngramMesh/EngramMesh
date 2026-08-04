@@ -401,3 +401,28 @@ async def test_check_ready_succeeds_when_database_is_available() -> None:
         database.connection = healthy_connection
         await runtime.startup()
         await runtime.check_ready()
+
+
+@pytest.mark.asyncio
+async def test_runtime_startup_uses_in_memory_database_when_postgres_mocked() -> None:
+    settings = _test_settings()
+    runtime = create_runtime(settings)
+    with (
+        patch("engrammesh.bootstrap.composition.PostgresMemoryDatabase") as memory_cls,
+        patch("engrammesh.bootstrap.composition.PostgresRuntimeDatabase") as runtime_cls,
+    ):
+        memory_cls.return_value.open = AsyncMock()
+        memory_cls.return_value.close = AsyncMock()
+        runtime_cls.return_value.open = AsyncMock()
+        runtime_cls.return_value.close = AsyncMock()
+        await runtime.startup()
+        try:
+            orchestrator = runtime.start_execution_handler()._orchestrator
+            from engrammesh.modules.runtime.adapters.in_memory.database import (
+                InMemoryRuntimeDatabase,
+            )
+
+            assert isinstance(orchestrator.database, InMemoryRuntimeDatabase)
+            runtime_cls.assert_not_called()
+        finally:
+            await runtime.shutdown()

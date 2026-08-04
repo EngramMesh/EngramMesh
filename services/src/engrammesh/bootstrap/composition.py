@@ -24,6 +24,9 @@ from engrammesh.modules.memory.adapters.postgres import (
     PostgresMemoryUnitOfWorkFactory,
     PostgresOutboxRelayStore,
 )
+from engrammesh.modules.memory.adapters.postgres.connection import (
+    PostgresMemoryDatabase as PostgresMemoryDatabaseType,
+)
 from engrammesh.modules.memory.application.contracts import (
     RelayOutboxCommand,
     RelayOutboxResult,
@@ -45,6 +48,10 @@ from engrammesh.modules.runtime.adapters.in_memory.database import (
 from engrammesh.modules.runtime.adapters.in_memory.orchestrator import (
     InMemoryOrchestratorPort,
 )
+from engrammesh.modules.runtime.adapters.postgres import PostgresRuntimeDatabase
+from engrammesh.modules.runtime.adapters.postgres.database import (
+    PostgresRuntimeDatabase as PostgresRuntimeDatabaseType,
+)
 from engrammesh.modules.runtime.adapters.temporal.connection import (
     TemporalConnectionSettings,
     connect_temporal_client,
@@ -59,7 +66,7 @@ from engrammesh.modules.runtime.application.get_execution_snapshot import (
     GetExecutionSnapshotHandler,
 )
 from engrammesh.modules.runtime.application.start_execution import StartExecutionHandler
-from engrammesh.modules.runtime.ports import OrchestratorPort
+from engrammesh.modules.runtime.ports import OrchestratorPort, RuntimeDatabasePort
 
 
 def load_settings() -> AppSettings:
@@ -84,7 +91,6 @@ class AppRuntime:
     __slots__ = (
         "_cancel_execution_handler",
         "_database",
-        "_execution_index",
         "_get_episode_handler",
         "_get_execution_snapshot_handler",
         "_handler",
@@ -94,6 +100,7 @@ class AppRuntime:
         "_orchestrator",
         "_outbox_publisher",
         "_relay_handler",
+        "_runtime_database",
         "_settings",
         "_start_execution_handler",
         "_started",
@@ -114,7 +121,7 @@ class AppRuntime:
         self._logging_publisher = LoggingOutboxEventPublisher()
         self._outbox_publisher: OutboxEventPublisher = self._logging_publisher
         self._relay_handler: RelayOutboxEventsHandler | None = None
-        self._execution_index: InMemoryRuntimeDatabase | None = None
+        self._runtime_database: RuntimeDatabasePort | None = None
         self._orchestrator: OrchestratorPort | None = None
         self._temporal_client: Any = None
         self._start_execution_handler: StartExecutionHandler | None = None
@@ -159,7 +166,18 @@ class AppRuntime:
                 self._outbox_publisher = self._logging_publisher
 
         if self._settings.modules.runtime_enabled and self._orchestrator is None:
-            self._execution_index = InMemoryRuntimeDatabase()
+            if isinstance(self._database, PostgresMemoryDatabaseType):
+                self._runtime_database = PostgresRuntimeDatabase(
+                    self._settings.postgres.dsn.get_secret_value()
+                )
+                await self._runtime_database.open()
+            elif not self._settings.modules.memory_enabled:
+                raise ConfigurationError(
+                    "runtime_storage_unconfigured",
+                    "runtime requires postgres.dsn when memory is disabled",
+                )
+            else:
+                self._runtime_database = InMemoryRuntimeDatabase()
             if self._settings.temporal.enabled:
                 temporal = self._settings.temporal
                 self._temporal_client = await connect_temporal_client(
@@ -172,20 +190,21 @@ class AppRuntime:
             self._orchestrator = self._create_orchestrator()
 
     def _create_orchestrator(self) -> OrchestratorPort:
-        assert self._execution_index is not None
+        assert self._runtime_database is not None
         clock = SystemUtcClock()
         if not self._settings.temporal.enabled:
-            return InMemoryOrchestratorPort(clock, self._execution_index)
+            return InMemoryOrchestratorPort(clock, self._runtime_database)
         assert self._temporal_client is not None
         return TemporalOrchestratorPort(
             self._temporal_client,
             task_queue=self._settings.temporal.task_queue,
-            index=self._execution_index,
+            index=self._runtime_database,
             clock=clock,
         )
 
     async def shutdown(self) -> None:
         database = self._database
+        runtime_database = self._runtime_database
         self._database = None
         self._unit_of_work_factory = None
         self._handler = None
@@ -193,7 +212,7 @@ class AppRuntime:
         self._list_episodes_handler = None
         self._inbox_handler = None
         self._relay_handler = None
-        self._execution_index = None
+        self._runtime_database = None
         self._orchestrator = None
         self._temporal_client = None
         self._start_execution_handler = None
@@ -202,6 +221,8 @@ class AppRuntime:
         self._logging_publisher = LoggingOutboxEventPublisher()
         self._outbox_publisher = LoggingOutboxEventPublisher()
         self._started = False
+        if isinstance(runtime_database, PostgresRuntimeDatabaseType):
+            await runtime_database.close()
         if database is not None:
             await database.close()
 
