@@ -67,14 +67,14 @@ class PrincipalBinding:
 
 
 @asynccontextmanager
-async def episode_auth_context(
+async def _tenant_auth_context(
     *,
     oidc_enabled: bool,
     path_tenant_id: UUID,
     authorization: str | None,
     verifier: TokenVerifierPort | None,
 ) -> AsyncIterator[AuthenticatedPrincipal | None]:
-    """Authenticate episode HTTP requests when OIDC is enabled."""
+    """Authenticate tenant-scoped HTTP requests when OIDC is enabled."""
     if not oidc_enabled:
         yield None
         return
@@ -89,4 +89,40 @@ async def episode_auth_context(
         verifier=verifier,
     )
     with PrincipalBinding(principal):
+        yield principal
+
+
+@asynccontextmanager
+async def episode_auth_context(
+    *,
+    oidc_enabled: bool,
+    path_tenant_id: UUID,
+    authorization: str | None,
+    verifier: TokenVerifierPort | None,
+) -> AsyncIterator[AuthenticatedPrincipal | None]:
+    """Authenticate episode HTTP requests when OIDC is enabled."""
+    async with _tenant_auth_context(
+        oidc_enabled=oidc_enabled,
+        path_tenant_id=path_tenant_id,
+        authorization=authorization,
+        verifier=verifier,
+    ) as principal:
+        yield principal
+
+
+@asynccontextmanager
+async def execution_auth_context(
+    *,
+    oidc_enabled: bool,
+    path_tenant_id: UUID,
+    authorization: str | None,
+    verifier: TokenVerifierPort | None,
+) -> AsyncIterator[AuthenticatedPrincipal | None]:
+    """Authenticate execution HTTP requests when OIDC is enabled."""
+    async with _tenant_auth_context(
+        oidc_enabled=oidc_enabled,
+        path_tenant_id=path_tenant_id,
+        authorization=authorization,
+        verifier=verifier,
+    ) as principal:
         yield principal
