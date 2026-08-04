@@ -9,7 +9,10 @@ from fastapi import FastAPI, Header, Query
 from starlette.responses import JSONResponse
 from starlette.types import Lifespan
 
-from engrammesh.bootstrap.auth.dependencies import episode_auth_context
+from engrammesh.bootstrap.auth.dependencies import (
+    episode_auth_context,
+    execution_auth_context,
+)
 from engrammesh.bootstrap.auth.ports import TokenVerifierPort
 from engrammesh.bootstrap.composition import AppRuntime, ReadinessError
 from engrammesh.bootstrap.http.errors import register_exception_handlers
@@ -17,13 +20,29 @@ from engrammesh.bootstrap.http.mappers import (
     episode_to_response,
     parse_correlation_id,
     resolve_query_actor_id,
+    snapshot_to_response,
+    start_result_to_response,
+    to_cancel_execution_command,
     to_command,
     to_get_episode_query,
+    to_get_execution_snapshot_query,
     to_list_episodes_query,
     to_response,
+    to_start_execution_command,
 )
-from engrammesh.bootstrap.http.schemas import ListEpisodesResponse, RecordEpisodeRequest
-from engrammesh.shared.kernel.ids import AgentInstanceId, MemoryId, SubjectId, TenantId
+from engrammesh.bootstrap.http.schemas import (
+    CancelExecutionRequest,
+    ListEpisodesResponse,
+    RecordEpisodeRequest,
+    StartExecutionRequest,
+)
+from engrammesh.shared.kernel.ids import (
+    AgentInstanceId,
+    ExecutionId,
+    MemoryId,
+    SubjectId,
+    TenantId,
+)
 
 
 def create_app(
@@ -154,5 +173,92 @@ def create_app(
                 next_cursor=result.next_cursor,
             )
             return JSONResponse(content=response.model_dump(mode="json"))
+
+    @app.post("/v1/tenants/{tenant_id}/executions")
+    async def start_execution(
+        tenant_id: UUID,
+        body: StartExecutionRequest,
+        x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
+        authorization: str | None = Header(default=None, alias="Authorization"),
+    ) -> JSONResponse:
+        async with execution_auth_context(
+            oidc_enabled=runtime.settings.oidc.enabled,
+            path_tenant_id=tenant_id,
+            authorization=authorization,
+            verifier=verifier,
+        ) as principal:
+            correlation_id = parse_correlation_id(x_correlation_id)
+            command = to_start_execution_command(
+                path_tenant_id=TenantId(tenant_id),
+                correlation_id=correlation_id,
+                body=body,
+                principal=principal,
+            )
+            result = await runtime.start_execution_handler().handle(command)
+            response = start_result_to_response(result)
+            return JSONResponse(
+                status_code=201 if result.created else 200,
+                content=response.model_dump(mode="json"),
+            )
+
+    @app.get("/v1/tenants/{tenant_id}/executions/{execution_id}")
+    async def get_execution(
+        tenant_id: UUID,
+        execution_id: UUID,
+        subject_id: Annotated[UUID, Query()],
+        actor_id: Annotated[UUID | None, Query()] = None,
+        workspace_id: Annotated[str | None, Query()] = None,
+        agent_id: Annotated[UUID | None, Query()] = None,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+    ) -> JSONResponse:
+        async with execution_auth_context(
+            oidc_enabled=runtime.settings.oidc.enabled,
+            path_tenant_id=tenant_id,
+            authorization=authorization,
+            verifier=verifier,
+        ) as principal:
+            resolved_actor_id = resolve_query_actor_id(
+                principal=principal,
+                query_actor_id=actor_id,
+            )
+            query = to_get_execution_snapshot_query(
+                path_tenant_id=TenantId(tenant_id),
+                execution_id=ExecutionId(execution_id),
+                actor_id=resolved_actor_id,
+                subject_id=SubjectId(subject_id),
+                workspace_id=workspace_id,
+                agent_id=AgentInstanceId(agent_id) if agent_id is not None else None,
+            )
+            result = await runtime.get_execution_snapshot_handler().handle(query)
+            return JSONResponse(
+                content=snapshot_to_response(result.snapshot).model_dump(mode="json")
+            )
+
+    @app.post("/v1/tenants/{tenant_id}/executions/{execution_id}/cancel")
+    async def cancel_execution(
+        tenant_id: UUID,
+        execution_id: UUID,
+        body: CancelExecutionRequest,
+        x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
+        authorization: str | None = Header(default=None, alias="Authorization"),
+    ) -> JSONResponse:
+        async with execution_auth_context(
+            oidc_enabled=runtime.settings.oidc.enabled,
+            path_tenant_id=tenant_id,
+            authorization=authorization,
+            verifier=verifier,
+        ) as principal:
+            correlation_id = parse_correlation_id(x_correlation_id)
+            command = to_cancel_execution_command(
+                path_tenant_id=TenantId(tenant_id),
+                correlation_id=correlation_id,
+                execution_id=ExecutionId(execution_id),
+                body=body,
+                principal=principal,
+            )
+            result = await runtime.cancel_execution_handler().handle(command)
+            return JSONResponse(
+                content=snapshot_to_response(result.snapshot).model_dump(mode="json")
+            )
 
     return app
