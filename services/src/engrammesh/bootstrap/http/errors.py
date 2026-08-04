@@ -19,6 +19,7 @@ from engrammesh.bootstrap.http.mappers import (
     ActorIdRequiredError,
     InvalidCorrelationIdError,
     LimitOutOfRangeError,
+    MemoryQueryScopeMismatchError,
     TenantMismatchError,
 )
 from engrammesh.bootstrap.settings import ConfigurationError
@@ -31,6 +32,15 @@ from engrammesh.modules.memory.domain.errors import (
     EpisodeIdempotencyConflict,
     InvalidEpisodeCursor,
 )
+from engrammesh.modules.runtime.application.errors import (
+    ExecutionAuthorizationDenied,
+    OrchestrationUnavailable,
+)
+from engrammesh.modules.runtime.domain.errors import (
+    ExecutionIdempotencyConflict,
+    ExecutionNotFound,
+    InvalidExecutionTransition,
+)
 
 _EPISODE_AUTHORIZATION_DENIED_MESSAGE = "episode recording is not authorized"
 _EPISODE_READ_AUTHORIZATION_DENIED_MESSAGE = "episode reading is not authorized"
@@ -39,6 +49,13 @@ _INVALID_EPISODE_CURSOR_MESSAGE = "episode list cursor is invalid"
 _EPISODE_IDEMPOTENCY_CONFLICT_MESSAGE = (
     "idempotency key conflicts with an existing episode"
 )
+_EXECUTION_AUTHORIZATION_DENIED_MESSAGE = "execution is not authorized"
+_EXECUTION_NOT_FOUND_MESSAGE = "execution not found"
+_EXECUTION_IDEMPOTENCY_CONFLICT_MESSAGE = (
+    "idempotency key conflicts with an existing execution"
+)
+_INVALID_EXECUTION_TRANSITION_MESSAGE = "execution transition is not allowed"
+_ORCHESTRATION_UNAVAILABLE_MESSAGE = "orchestration backend is unavailable"
 _AUTHENTICATION_REQUIRED_MESSAGE = "authentication is required"
 _INVALID_TOKEN_MESSAGE = "invalid token"
 _TENANT_ACCESS_DENIED_MESSAGE = "tenant access is denied"
@@ -63,7 +80,7 @@ def error_envelope(
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    """Register HTTP exception handlers for episode ingest error mapping."""
+    """Register HTTP exception handlers for control API error mapping."""
 
     @app.exception_handler(AuthenticationRequiredError)
     async def authentication_required_handler(
@@ -163,6 +180,91 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=error_envelope(
                 "episode_idempotency_conflict",
                 _EPISODE_IDEMPOTENCY_CONFLICT_MESSAGE,
+            ),
+        )
+
+    @app.exception_handler(ExecutionAuthorizationDenied)
+    async def execution_authorization_denied_handler(
+        _request: Request,
+        _exc: ExecutionAuthorizationDenied,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=403,
+            content=error_envelope(
+                "execution_authorization_denied",
+                _EXECUTION_AUTHORIZATION_DENIED_MESSAGE,
+            ),
+        )
+
+    @app.exception_handler(ExecutionNotFound)
+    async def execution_not_found_handler(
+        _request: Request,
+        _exc: ExecutionNotFound,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content=error_envelope(
+                "execution_not_found",
+                _EXECUTION_NOT_FOUND_MESSAGE,
+            ),
+        )
+
+    @app.exception_handler(ExecutionIdempotencyConflict)
+    async def execution_idempotency_conflict_handler(
+        _request: Request,
+        _exc: ExecutionIdempotencyConflict,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content=error_envelope(
+                "execution_idempotency_conflict",
+                _EXECUTION_IDEMPOTENCY_CONFLICT_MESSAGE,
+            ),
+        )
+
+    @app.exception_handler(InvalidExecutionTransition)
+    async def invalid_execution_transition_handler(
+        _request: Request,
+        _exc: InvalidExecutionTransition,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content=error_envelope(
+                "invalid_execution_transition",
+                _INVALID_EXECUTION_TRANSITION_MESSAGE,
+            ),
+        )
+
+    @app.exception_handler(OrchestrationUnavailable)
+    async def orchestration_unavailable_handler(
+        _request: Request,
+        _exc: OrchestrationUnavailable,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content=error_envelope(
+                "orchestration_unavailable",
+                _ORCHESTRATION_UNAVAILABLE_MESSAGE,
+            ),
+        )
+
+    @app.exception_handler(MemoryQueryScopeMismatchError)
+    async def memory_query_scope_mismatch_handler(
+        _request: Request,
+        exc: MemoryQueryScopeMismatchError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content=error_envelope(
+                "validation_error",
+                _VALIDATION_ERROR_MESSAGE,
+                details=(
+                    {
+                        "type": "value_error",
+                        "loc": ["memory_query", "scope"],
+                        "msg": str(exc),
+                    },
+                ),
             ),
         )
 
