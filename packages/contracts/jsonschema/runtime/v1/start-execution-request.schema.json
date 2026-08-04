@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://engrammesh.org/contracts/runtime/v1/start-execution-request.schema.json",
+  "version": "1.0.0",
+  "title": "Runtime Start Execution HTTP Request",
+  "description": "Version 1.0.0 contract for the HTTP request body of POST /v1/tenants/{tenant_id}/executions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "scope",
+    "objective_ref",
+    "root_agent_id",
+    "budget",
+    "idempotency_key"
+  ],
+  "properties": {
+    "actor_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "scope": {
+      "$ref": "#/$defs/httpMemoryScope"
+    },
+    "objective_ref": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "root_agent_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "memory_query": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/memoryQuery"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "budget": {
+      "$ref": "#/$defs/budget"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    }
+  },
+  "$defs": {
+    "httpMemoryScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenant_id",
+        "subject_id"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "subject_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "workspace_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "agent_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_input_tokens",
+        "max_output_tokens",
+        "max_cost_micros",
+        "deadline"
+      ],
+      "properties": {
+        "max_input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_cost_micros": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deadline": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+        }
+      }
+    },
+    "memoryQuery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "query_id",
+        "scope",
+        "text"
+      ],
+      "properties": {
+        "query_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "scope": {
+          "$ref": "#/$defs/httpMemoryScope"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "valid_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+        },
+        "recorded_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

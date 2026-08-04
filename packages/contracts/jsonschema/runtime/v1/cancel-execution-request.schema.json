@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://engrammesh.org/contracts/runtime/v1/cancel-execution-request.schema.json",
+  "version": "1.0.0",
+  "title": "Runtime Cancel Execution HTTP Request",
+  "description": "Version 1.0.0 contract for the HTTP request body of POST /v1/tenants/{tenant_id}/executions/{execution_id}/cancel.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "scope",
+    "idempotency_key"
+  ],
+  "properties": {
+    "actor_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "scope": {
+      "$ref": "#/$defs/httpMemoryScope"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    }
+  },
+  "$defs": {
+    "httpMemoryScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenant_id",
+        "subject_id"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "subject_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "workspace_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "agent_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        }
+      }
+    }
+  }
+}
