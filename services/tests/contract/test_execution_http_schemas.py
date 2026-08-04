@@ -13,7 +13,10 @@ import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
-from engrammesh.bootstrap.http.mappers import snapshot_to_response, start_result_to_response
+from engrammesh.bootstrap.http.mappers import (
+    snapshot_to_response,
+    start_result_to_response,
+)
 from engrammesh.modules.memory.public import MemoryScope
 from engrammesh.modules.runtime.application.contracts import StartExecutionResult
 from engrammesh.modules.runtime.domain.model import (
