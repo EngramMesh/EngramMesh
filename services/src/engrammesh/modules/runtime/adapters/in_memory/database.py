@@ -3,32 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from collections.abc import Callable
+from dataclasses import replace
 from types import MappingProxyType
 from typing import TypeVar, final
 
 from engrammesh.modules.runtime.domain.model import ExecutionSnapshot
-from engrammesh.shared.kernel.ids import ExecutionId, TenantId
-
-type _IdempotencyIndex = Mapping[tuple[TenantId, str], ExecutionId]
-type _FingerprintIndex = Mapping[ExecutionId, tuple[object, ...]]
-
-
-@dataclass(frozen=True, slots=True)
-class _CommittedRuntimeState:
-    snapshots: Mapping[ExecutionId, ExecutionSnapshot]
-    idempotency_index: _IdempotencyIndex
-    fingerprints: _FingerprintIndex
-
-
-def _empty_state() -> _CommittedRuntimeState:
-    return _CommittedRuntimeState(
-        snapshots=MappingProxyType({}),
-        idempotency_index=MappingProxyType({}),
-        fingerprints=MappingProxyType({}),
-    )
-
+from engrammesh.modules.runtime.runtime_state import (
+    CommittedRuntimeState,
+    empty_runtime_state,
+)
 
 _T = TypeVar("_T")
 
@@ -41,16 +25,16 @@ class InMemoryRuntimeDatabase:
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._state = _empty_state()
+        self._state = empty_runtime_state()
 
-    async def read(self, callback: Callable[[_CommittedRuntimeState], _T]) -> _T:
+    async def read(self, callback: Callable[[CommittedRuntimeState], _T]) -> _T:
         """Run *callback* against the current committed state under the lock."""
         async with self._lock:
             return callback(self._state)
 
     async def write(
         self,
-        callback: Callable[[_CommittedRuntimeState], _CommittedRuntimeState],
+        callback: Callable[[CommittedRuntimeState], CommittedRuntimeState],
     ) -> None:
         """Atomically replace committed state with *callback*'s result."""
         async with self._lock:

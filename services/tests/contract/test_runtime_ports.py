@@ -47,6 +47,7 @@ from engrammesh.modules.runtime.ports import (
     PolicyPort,
     RemoteAgentPort,
     RuntimeAuthorizationPort,
+    RuntimeDatabasePort,
     RuntimeIdentityPort,
     ToolExecutorPort,
     ToolRegistryPort,
@@ -489,3 +490,8 @@ def test_public_surface_exports_only_supported_domain_contracts() -> None:
         "derive_effect_id",
     }
     assert not {protocol.__name__ for protocol in PROTOCOLS} & set(public_exports)
+
+
+def test_runtime_database_port_exposes_read_and_write() -> None:
+    assert hasattr(RuntimeDatabasePort, "read")
+    assert hasattr(RuntimeDatabasePort, "write")
