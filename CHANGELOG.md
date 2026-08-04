@@ -57,6 +57,12 @@ Semantic Versioning after its first public release.
   principal-aware HTTP mappers, `record-episode-request` schema v1.1.0 (optional
   `actor_id`), integration and PostgreSQL E2E coverage, and bilingual services
   documentation for OIDC settings and error codes.
+- Temporal runtime adapter: `InMemoryOrchestratorPort` and `TemporalOrchestratorPort`
+  with shared `ExecutionIndex`, `StartExecutionHandler` / `GetExecutionSnapshotHandler`
+  / `CancelExecutionHandler`, lifecycle workflow and worker entry point
+  (`bootstrap/worker.py`), contract and integration coverage (including
+  `@pytest.mark.temporal`), and bilingual services documentation for runtime
+  enablement and Temporal settings.
 
 ### Changed
 
