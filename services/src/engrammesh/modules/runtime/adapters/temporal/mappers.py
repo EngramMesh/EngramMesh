@@ -3,105 +3,26 @@
 from __future__ import annotations
 
 from datetime import datetime
-from types import MappingProxyType
 from typing import cast
-from uuid import UUID
 
-from engrammesh.modules.memory.public import MemoryQuery, MemoryScope
+from engrammesh.modules.memory.public import MemoryQuery
+from engrammesh.modules.runtime.adapters.shared.snapshot_codec import (
+    _parse_datetime,
+    _parse_optional_datetime,
+    _require_int,
+    _require_mapping,
+    _require_str,
+    _scope_from_payload,
+    scope_to_payload,
+    snapshot_from_json,
+    snapshot_to_json,
+)
 from engrammesh.modules.runtime.domain.model import (
     Budget,
     ExecutionSnapshot,
     ExecutionSpec,
     ExecutionStatus,
-    NodeStatus,
 )
-from engrammesh.shared.kernel.ids import (
-    AgentInstanceId,
-    ArtifactId,
-    ExecutionId,
-    NodeId,
-    SubjectId,
-    TenantId,
-)
-
-
-def _require_mapping(value: object, field_name: str) -> dict[str, object]:
-    if not isinstance(value, dict):
-        msg = f"{field_name} must be a mapping"
-        raise TypeError(msg)
-    return cast(dict[str, object], value)
-
-
-def _require_str(value: object, field_name: str) -> str:
-    if not isinstance(value, str):
-        msg = f"{field_name} must be a string"
-        raise TypeError(msg)
-    return value
-
-
-def _require_int(value: object, field_name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        msg = f"{field_name} must be an integer"
-        raise TypeError(msg)
-    return value
-
-
-def _parse_uuid_value[T](value_type: type[T], value: object, field_name: str) -> T:
-    text = _require_str(value, field_name)
-    return value_type(UUID(text))  # type: ignore[call-arg]
-
-
-def _parse_optional_uuid_value[T](
-    value_type: type[T],
-    value: object,
-    field_name: str,
-) -> T | None:
-    if value is None:
-        return None
-    return _parse_uuid_value(value_type, value, field_name)
-
-
-def _parse_datetime(value: object, field_name: str) -> datetime:
-    text = _require_str(value, field_name)
-    parsed = datetime.fromisoformat(text)
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        msg = f"{field_name} must be timezone-aware"
-        raise ValueError(msg)
-    return parsed
-
-
-def _parse_optional_datetime(value: object, field_name: str) -> datetime | None:
-    if value is None:
-        return None
-    return _parse_datetime(value, field_name)
-
-
-def _scope_to_payload(scope: MemoryScope) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "tenant_id": str(scope.tenant_id),
-        "subject_id": str(scope.subject_id),
-        "workspace_id": scope.workspace_id,
-        "agent_id": None if scope.agent_id is None else str(scope.agent_id),
-    }
-    return payload
-
-
-def _scope_from_payload(payload: object) -> MemoryScope:
-    mapping = _require_mapping(payload, "scope")
-    return MemoryScope(
-        tenant_id=_parse_uuid_value(TenantId, mapping["tenant_id"], "scope.tenant_id"),
-        subject_id=_parse_uuid_value(
-            SubjectId,
-            mapping["subject_id"],
-            "scope.subject_id",
-        ),
-        workspace_id=cast(str | None, mapping.get("workspace_id")),
-        agent_id=_parse_optional_uuid_value(
-            AgentInstanceId,
-            mapping.get("agent_id"),
-            "scope.agent_id",
-        ),
-    )
 
 
 def _budget_to_payload(budget: Budget) -> dict[str, object]:
@@ -135,7 +56,7 @@ def _budget_from_payload(payload: object) -> Budget:
 def _memory_query_to_payload(memory_query: MemoryQuery) -> dict[str, object]:
     return {
         "query_id": memory_query.query_id,
-        "scope": _scope_to_payload(memory_query.scope),
+        "scope": scope_to_payload(memory_query.scope),
         "text": memory_query.text,
         "valid_at": (
             None
@@ -172,7 +93,7 @@ def spec_to_payload(spec: ExecutionSpec) -> dict[str, object]:
     """Serialize an execution spec for Temporal workflow input."""
     return {
         "id": str(spec.id),
-        "scope": _scope_to_payload(spec.scope),
+        "scope": scope_to_payload(spec.scope),
         "objective_ref": str(spec.objective_ref),
         "root_agent_id": str(spec.root_agent_id),
         "memory_query": (
@@ -187,68 +108,12 @@ def spec_to_payload(spec: ExecutionSpec) -> dict[str, object]:
 
 def snapshot_to_payload(snapshot: ExecutionSnapshot) -> dict[str, object]:
     """Serialize an execution snapshot for Temporal workflow state."""
-    node_statuses = {
-        str(node_id): status.value
-        for node_id, status in snapshot.node_statuses.items()
-    }
-    return {
-        "execution_id": str(snapshot.execution_id),
-        "scope": _scope_to_payload(snapshot.scope),
-        "revision": snapshot.revision,
-        "status": snapshot.status.value,
-        "plan_revision": snapshot.plan_revision,
-        "node_statuses": node_statuses,
-        "suspension": None,
-        "result_ref": (
-            None if snapshot.result_ref is None else str(snapshot.result_ref)
-        ),
-        "failure": None,
-        "updated_at": snapshot.updated_at.isoformat(),
-    }
+    return snapshot_to_json(snapshot)
 
 
 def payload_to_snapshot(payload: dict[str, object]) -> ExecutionSnapshot:
     """Deserialize a Temporal workflow snapshot payload into domain state."""
-    status_text = _require_str(payload["status"], "status")
-    try:
-        status = ExecutionStatus(status_text)
-    except ValueError as exc:
-        msg = "status must be a valid execution status"
-        raise ValueError(msg) from exc
-
-    node_statuses_payload = _require_mapping(
-        payload.get("node_statuses", {}),
-        "node_statuses",
-    )
-    node_statuses: dict[NodeId, NodeStatus] = {}
-    for node_id_text, node_status_text in node_statuses_payload.items():
-        try:
-            node_status = NodeStatus(_require_str(node_status_text, "node_statuses.value"))
-        except ValueError as exc:
-            msg = "node_statuses values must be valid node statuses"
-            raise ValueError(msg) from exc
-        node_statuses[NodeId(UUID(node_id_text))] = node_status
-
-    return ExecutionSnapshot(
-        execution_id=_parse_uuid_value(
-            ExecutionId,
-            payload["execution_id"],
-            "execution_id",
-        ),
-        scope=_scope_from_payload(payload["scope"]),
-        revision=_require_int(payload["revision"], "revision"),
-        status=status,
-        plan_revision=cast(int | None, payload.get("plan_revision")),
-        node_statuses=MappingProxyType(node_statuses),
-        suspension=None,
-        result_ref=_parse_optional_uuid_value(
-            ArtifactId,
-            payload.get("result_ref"),
-            "result_ref",
-        ),
-        failure=None,
-        updated_at=_parse_datetime(payload["updated_at"], "updated_at"),
-    )
+    return snapshot_from_json(payload)
 
 
 def initial_snapshot_payload(
