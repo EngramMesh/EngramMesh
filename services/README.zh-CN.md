@@ -6,7 +6,7 @@
 
 本目录包含经过测试的 EngramMesh Python 3.14 服务架构脚手架，以及一个经过测试的 Episode 摄取应用切片和一个经过测试的持久化执行运行时切片。它定义了不可变的共享标识符与事件元数据、记忆模块和持久化运行时的公共契约、依赖规则、类型化进程配置、从设置装配 PostgreSQL 记忆 Handler 与运行时编排的组合根、带版本的 JSON Schema 事件契约，以及仅用于测试与开发的事务型内存 Adapter。
 
-它**不**包含执行 HTTP API、PostgreSQL 执行快照存储、外部事件分发器、依赖注入框架、模型或工具集成、投影流水线或可部署产品功能。最小 HTTP 控制 API 已暴露 Episode 摄取、Episode 读取、健康探针，以及可选的 OIDC Bearer JWT 鉴权；生产加固仍属后续工作。内存 Adapter 仅在单个进程内保存状态，并不持久化。当 `temporal.enabled=true` 时，独立的 Temporal Worker 入口用于持久化工作流执行。测试通过只能证明本文所述应用契约与架构契约成立，并不表示已经存在可部署的运行时。
+它**不**包含 PostgreSQL 执行快照存储、外部事件分发器、依赖注入框架、模型或工具集成、投影流水线或可部署产品功能。最小 HTTP 控制 API 已暴露 Episode 摄取、Episode 读取、执行启动/快照/取消、健康探针，以及可选的 OIDC Bearer JWT 鉴权；生产加固仍属后续工作。内存 Adapter 仅在单个进程内保存状态，并不持久化。当 `temporal.enabled=true` 时，独立的 Temporal Worker 入口用于持久化工作流执行。测试通过只能证明本文所述应用契约与架构契约成立，并不表示已经存在可部署的运行时。
 
 ## 模块树
 
@@ -15,7 +15,7 @@ services/
 ├── src/engrammesh/
 │   ├── bootstrap/
 │   │   ├── composition.py    # AppRuntime 组合根
-│   │   ├── http/             # FastAPI 控制 API（Episode 摄取、探针）
+│   │   ├── http/             # FastAPI 控制 API（Episode、执行、探针）
 │   │   ├── infrastructure.py # 默认时钟、标识符与授权 Port
 │   │   ├── server.py         # uvicorn 入口
 │   │   ├── settings.py       # 类型化、不可变的配置边界
@@ -302,11 +302,9 @@ Temporal 测试使用 `WorkflowEnvironment` 时间跳过，验证工作流完成
 
 本切片明确不包含：
 
-- 执行 HTTP API（Slice 3 — 后续 ④a）
 - PostgreSQL 执行快照存储与运行时 Outbox 事件（Slice 4 — 后续 ④b）
 - LangGraph、PlannerPort、AgentEnginePort、完整 Plan DAG 执行
 - Claim 提取（Phase 2）
-- OIDC 运行时授权（推迟至执行 HTTP 工作）
 
 详见 `docs/rfcs/2026-07-31-temporal-runtime-adapter.md` 与
 `docs/superpowers/specs/2026-07-31-temporal-runtime-adapter-design.md`。
@@ -384,7 +382,7 @@ async with create_runtime(load_settings()) as runtime:
 
 ### 授权
 
-Episode HTTP 路由通过 `create_memory_authorization()` 在组合时按 `oidc.enabled` 选择两种授权策略之一。
+Episode HTTP 路由通过 `create_memory_authorization()` 在组合时按 `oidc.enabled` 选择两种授权策略之一。执行 HTTP 路由通过 `create_runtime_authorization()` 使用相同 OIDC 开关：OIDC 关闭时为 `EnvironmentGatedRuntimeAuthorization`，OIDC 开启时为 `TenantScopedRuntimeAuthorization`。
 
 #### OIDC 关闭时（`oidc.enabled=false`，默认）
 
@@ -677,6 +675,129 @@ curl -sS "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/
 ```
 
 当 `next_cursor` 非空时，在下一请求中以 `cursor` 查询参数传入，并保持相同 scope 与 `limit`。
+
+## 执行 HTTP API
+
+`bootstrap/http/` 通过 `AppRuntime.start_execution_handler()`、
+`get_execution_snapshot_handler()` 与 `cancel_execution_handler()` 暴露持久化执行控制。
+路由使用 `execution_auth_context` 处理 OIDC（见[授权](#授权)）。FastAPI 与 uvicorn 仅出现在 bootstrap；运行时应用 Handler 保持与框架无关。
+
+### 端点
+
+| 方法 | 路径 | 成功状态码 | 说明 |
+|------|------|-----------|------|
+| `POST` | `/v1/tenants/{tenant_id}/executions` | `201` 或 `200` | 启动一次执行；新建为 `201`，精确幂等重放为 `200` |
+| `GET` | `/v1/tenants/{tenant_id}/executions/{execution_id}` | `200` / `403` / `404` / `422` / `503` | 按精确 scope 读取执行快照 |
+| `POST` | `/v1/tenants/{tenant_id}/executions/{execution_id}/cancel` | `200` / `403` / `404` / `409` / `422` / `503` | 取消一次执行 |
+
+启动与取消的 `POST` 接受可选请求头 `X-Correlation-Id`（UUID）。缺省时服务端生成新 correlation ID；非 UUID 格式返回 **422**。
+
+路径 `tenant_id` 必须与 body `scope.tenant_id` 一致；不一致返回 **422**。启动时若提供 `memory_query`，其 `scope` 须与执行 `scope` 一致；不一致返回 **422** `validation_error`。
+
+**成功响应体：**
+
+| 端点 | 状态码 | 响应体 |
+|------|--------|--------|
+| `POST .../executions` | `201` | `ExecutionSnapshotResponse` + `created: true` |
+| `POST .../executions` | `200` | `ExecutionSnapshotResponse` + `created: false`（幂等重放） |
+| `GET .../executions/{execution_id}` | `200` | `ExecutionSnapshotResponse`（见 `execution-snapshot-response.schema.json`） |
+| `POST .../executions/{execution_id}/cancel` | `200` | `ExecutionSnapshotResponse` |
+
+`ExecutionSnapshotResponse` 包含 `execution_id`、`scope`、`revision`、`status`、`plan_revision`、`node_statuses`、`suspension`、`result_ref`、`failure` 与 `updated_at`。
+
+### 读取与取消参数
+
+`GET` 快照需要查询参数：
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `subject_id` | 是 | 租户 scope 内的 subject UUID |
+| `workspace_id` | 否 | 可选 workspace 收窄 |
+| `agent_id` | 否 | 可选 agent 收窄 |
+| `actor_id` | OIDC 关闭时必填；OIDC 开启时省略 | 授权主体；启用 OIDC 时取自 JWT |
+
+取消在请求体中使用相同 `actor_id` 规则（启用 OIDC 时取自 JWT）。
+
+### 错误响应
+
+执行错误使用统一信封。共享 OIDC 与校验错误之外新增：
+
+| 状态码 | `error.code` | 触发条件 |
+|--------|--------------|----------|
+| `403` | `execution_authorization_denied` | `ExecutionAuthorizationDenied`（含 OIDC 关闭时的 `staging` / `production`） |
+| `404` | `execution_not_found` | 未知 id、scope 不匹配或跨租户访问（不泄漏存在性） |
+| `409` | `execution_idempotency_conflict` | 相同 `(tenant_id, idempotency_key)` 但执行定义字段不同 |
+| `409` | `invalid_execution_transition` | 取消或状态转换被拒绝（例如已 `succeeded`） |
+| `422` | `actor_id_not_allowed` | 启用 OIDC；body 或 query 中提供了 `actor_id` |
+| `422` | `actor_id_required` | 关闭 OIDC；body 或 query 中缺少 `actor_id` |
+| `422` | `validation_error` | Pydantic 校验失败、path/body `tenant_id` 不一致、`memory_query.scope` 不一致、非法 `X-Correlation-Id` |
+| `503` | `service_unavailable` | `ConfigurationError`（如 `runtime_disabled`） |
+| `503` | `orchestration_unavailable` | `OrchestrationUnavailable`（Temporal 或编排后端故障） |
+
+错误租户、错误 `subject_id`、错误可选 scope 收窄或未知 `execution_id` 均返回 **404** `execution_not_found`。跨租户存在性不得返回 **403**。
+
+当 `modules.runtime_enabled` 为 `False` 时，执行路由返回 **503** `service_unavailable`，错误详情含 `runtime_disabled`。
+
+### `curl` 示例（启动 → 读取 → 取消）
+
+```bash
+curl -sS -X POST "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/executions" \
+  -H "Content-Type: application/json" \
+  -H "X-Correlation-Id: 02ffae84-2764-41f3-a22a-4d4652a7c139" \
+  -d '{
+    "actor_id": "3ba213e4-3367-4e7c-9635-bcbfbad505e6",
+    "scope": {
+      "tenant_id": "53dad495-7915-439a-b03a-379452a1aa86",
+      "subject_id": "3d65c071-ac55-4847-a8f1-e3cb859d3c45",
+      "workspace_id": "workspace-42"
+    },
+    "objective_ref": "a2e57fc9-d07d-45dc-a647-76d195985d86",
+    "root_agent_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "memory_query": null,
+    "budget": {
+      "max_input_tokens": 1000,
+      "max_output_tokens": 500,
+      "max_cost_micros": 100000,
+      "deadline": "2026-08-04T12:00:00+00:00"
+    },
+    "idempotency_key": "exec-1"
+  }'
+```
+
+首次写入预期响应（`201`）：
+
+```json
+{ "execution_id": "<uuid>", "created": true, "status": "pending", "...": "..." }
+```
+
+读取快照：
+
+```bash
+EXECUTION_ID="<post-响应中的-uuid>"
+
+curl -sS "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/executions/${EXECUTION_ID}" \
+  "?subject_id=3d65c071-ac55-4847-a8f1-e3cb859d3c45" \
+  "&workspace_id=workspace-42" \
+  "&actor_id=3ba213e4-3367-4e7c-9635-bcbfbad505e6"
+```
+
+取消执行：
+
+```bash
+curl -sS -X POST "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/executions/${EXECUTION_ID}/cancel" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "actor_id": "3ba213e4-3367-4e7c-9635-bcbfbad505e6",
+    "scope": {
+      "tenant_id": "53dad495-7915-439a-b03a-379452a1aa86",
+      "subject_id": "3d65c071-ac55-4847-a8f1-e3cb859d3c45",
+      "workspace_id": "workspace-42"
+    },
+    "idempotency_key": "cancel-1"
+  }'
+```
+
+使用相同启动请求重放可观察幂等响应（`200`，`created: false`）。
 
 ## 运行示例
 

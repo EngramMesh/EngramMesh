@@ -73,7 +73,7 @@ See spec §10.
 ② Episode read API                               ✅
 ③ OIDC tenant context                            ✅
 ④ Temporal runtime adapter                       ✅
-   ④a Execution HTTP API + OIDC runtime auth      ← this slice
+   ④a Execution HTTP API + OIDC runtime auth      ✅
    ④b Execution snapshot store (PostgreSQL)      ← Slice 4
 ⑤ Claim extraction processor                     ← Phase 2 entry
 ```

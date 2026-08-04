@@ -28,7 +28,6 @@ This slice delivers Slice 1 (in-memory `OrchestratorPort` + application handlers
 
 ## 3. Non-goals
 
-- Execution HTTP API (Slice 3 — follow-up ④a)
 - PostgreSQL execution snapshot store / Outbox events (Slice 4 — follow-up ④b)
 - LangGraph, PlannerPort, AgentEnginePort, ArtifactStore
 - Full Plan DAG execution
@@ -125,7 +124,7 @@ See spec acceptance criteria (8 items), including:
 ② Episode read API                               ✅
 ③ OIDC tenant context                            ✅
 ④ Temporal runtime adapter                       ✅
-   ④a Execution HTTP API                         ← Slice 3
+   ④a Execution HTTP API                         ✅
    ④b Execution snapshot store (PostgreSQL)      ← Slice 4; replaces in-process ExecutionIndex
 ⑤ Claim extraction processor                     ← Phase 2 entry
 ```

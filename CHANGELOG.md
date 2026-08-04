@@ -63,6 +63,11 @@ Semantic Versioning after its first public release.
   (`bootstrap/worker.py`), contract and integration coverage (including
   `@pytest.mark.temporal`), and bilingual services documentation for runtime
   enablement and Temporal settings.
+- Execution HTTP API: `POST/GET /v1/tenants/{tenant_id}/executions`,
+  `POST .../cancel`, OIDC runtime authorization (`TenantScopedRuntimeAuthorization`),
+  JSON Schema contracts (`packages/contracts/jsonschema/runtime/v1/`), structured
+  error envelopes, unit/integration/OIDC tests, and bilingual services
+  documentation (endpoints, errors, `curl` example).
 
 ### Changed
 

@@ -13,11 +13,12 @@ PostgreSQL-backed memory handlers and runtime orchestration from settings,
 versioned JSON Schema event contracts, and transactional in-memory adapters for
 test and development use.
 
-It does **not** contain an execution HTTP API, a PostgreSQL execution snapshot
-store, external event dispatcher, dependency-injection framework, model or tool
-integration, projection pipeline, or deployable product feature. A minimal HTTP
-control API exposes Episode ingest, episode read, health probes, and optional
-OIDC Bearer JWT authentication; production hardening remains follow-up work.
+It does **not** contain a PostgreSQL execution snapshot store, external event
+dispatcher, dependency-injection framework, model or tool integration,
+projection pipeline, or deployable product feature. A minimal HTTP control API
+exposes Episode ingest, episode read, execution start/snapshot/cancel, health
+probes, and optional OIDC Bearer JWT authentication; production hardening
+remains follow-up work.
 The in-memory adapters are process-local and non-durable. A separate Temporal
 worker entry point exists for durable workflow execution when
 `temporal.enabled=true`. Passing tests prove the documented application and
@@ -30,7 +31,7 @@ services/
 ├── src/engrammesh/
 │   ├── bootstrap/
 │   │   ├── composition.py    # AppRuntime composition root
-│   │   ├── http/             # FastAPI control API (episode ingest, probes)
+│   │   ├── http/             # FastAPI control API (episode, execution, probes)
 │   │   ├── infrastructure.py # default clock, identity, and authorization ports
 │   │   ├── server.py         # uvicorn entry point
 │   │   ├── settings.py       # typed, immutable configuration boundary
@@ -403,11 +404,9 @@ completion, idempotent start replay, cancel, and worker-restart recovery.
 
 This slice deliberately excludes:
 
-- Execution HTTP API (Slice 3 — follow-up ④a)
 - PostgreSQL execution snapshot store and runtime Outbox events (Slice 4 — follow-up ④b)
 - LangGraph, PlannerPort, AgentEnginePort, full Plan DAG execution
 - Claim extraction (Phase 2)
-- OIDC runtime authorization (deferred to execution HTTP work)
 
 See `docs/rfcs/2026-07-31-temporal-runtime-adapter.md` and
 `docs/superpowers/specs/2026-07-31-temporal-runtime-adapter-design.md`.
@@ -529,6 +528,9 @@ inbox processing is needed.
 
 Episode HTTP routes use one of two authorization strategies, selected by
 `oidc.enabled` at composition time via `create_memory_authorization()`.
+Execution HTTP routes use the same OIDC toggle via
+`create_runtime_authorization()`: `EnvironmentGatedRuntimeAuthorization` when
+OIDC is disabled, `TenantScopedRuntimeAuthorization` when OIDC is enabled.
 
 #### When OIDC is disabled (`oidc.enabled=false`, default)
 
@@ -854,6 +856,143 @@ curl -sS "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/
 
 List pagination: when `next_cursor` is non-null, pass it as the `cursor` query
 parameter on the next request with the same scope and `limit`.
+
+## Execution HTTP API
+
+`bootstrap/http/` exposes durable execution control through
+`AppRuntime.start_execution_handler()`, `get_execution_snapshot_handler()`, and
+`cancel_execution_handler()`. Routes use `execution_auth_context` for OIDC (see
+[Authorization](#authorization)). FastAPI and uvicorn stay in bootstrap; runtime
+application handlers remain framework-neutral.
+
+### Endpoints
+
+| Method | Path | Success | Description |
+|--------|------|---------|-------------|
+| `POST` | `/v1/tenants/{tenant_id}/executions` | `201` or `200` | Start one execution; `201` when created, `200` on exact idempotent replay |
+| `GET` | `/v1/tenants/{tenant_id}/executions/{execution_id}` | `200` / `403` / `404` / `422` / `503` | Read one execution snapshot by exact scope |
+| `POST` | `/v1/tenants/{tenant_id}/executions/{execution_id}/cancel` | `200` / `403` / `404` / `409` / `422` / `503` | Cancel one execution |
+
+`POST` start and cancel accept optional header `X-Correlation-Id` (UUID). When
+omitted, the server generates a new correlation ID. Non-UUID values return
+**422**.
+
+Path `tenant_id` must match body `scope.tenant_id`; a mismatch returns **422**.
+When `memory_query` is supplied on start, its `scope` must match the execution
+`scope`; a mismatch returns **422** `validation_error`.
+
+**Success response bodies:**
+
+| Endpoint | Status | Body |
+|----------|--------|------|
+| `POST .../executions` | `201` | `ExecutionSnapshotResponse` + `created: true` |
+| `POST .../executions` | `200` | `ExecutionSnapshotResponse` + `created: false` (idempotent replay) |
+| `GET .../executions/{execution_id}` | `200` | `ExecutionSnapshotResponse` (see `execution-snapshot-response.schema.json`) |
+| `POST .../executions/{execution_id}/cancel` | `200` | `ExecutionSnapshotResponse` |
+
+`ExecutionSnapshotResponse` includes `execution_id`, `scope`, `revision`,
+`status`, `plan_revision`, `node_statuses`, `suspension`, `result_ref`,
+`failure`, and `updated_at`.
+
+### Get and cancel query parameters
+
+`GET` snapshot requires query parameters:
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `subject_id` | yes | UUID subject within the tenant scope |
+| `workspace_id` | no | Optional workspace narrowing |
+| `agent_id` | no | Optional agent narrowing |
+| `actor_id` | yes when OIDC off; omit when OIDC on | Authorization principal; from JWT when OIDC enabled |
+
+Cancel uses the same `actor_id` rules in the request body (or JWT when OIDC is
+enabled).
+
+### Error responses
+
+Execution errors use the canonical envelope. Additional codes beyond shared
+OIDC and validation errors:
+
+| Status | `error.code` | Condition |
+|--------|--------------|-----------|
+| `403` | `execution_authorization_denied` | `ExecutionAuthorizationDenied` (including `staging` / `production` when OIDC off) |
+| `404` | `execution_not_found` | Unknown id, wrong scope, or cross-tenant access (no existence leak) |
+| `409` | `execution_idempotency_conflict` | Same `(tenant_id, idempotency_key)` with differing execution-defining fields |
+| `409` | `invalid_execution_transition` | Cancel or transition rejected (for example already `succeeded`) |
+| `422` | `actor_id_not_allowed` | OIDC enabled; `actor_id` supplied in body or query |
+| `422` | `actor_id_required` | OIDC disabled; `actor_id` missing from body or query |
+| `422` | `validation_error` | Pydantic validation, path/body `tenant_id` mismatch, `memory_query.scope` mismatch, invalid `X-Correlation-Id` |
+| `503` | `service_unavailable` | `ConfigurationError` (for example `runtime_disabled`) |
+| `503` | `orchestration_unavailable` | `OrchestrationUnavailable` (Temporal or orchestrator backend failure) |
+
+Wrong tenant, wrong `subject_id`, wrong optional scope narrowing, or unknown
+`execution_id` all return **404** `execution_not_found`. Never **403** for
+cross-tenant existence leaks.
+
+When `modules.runtime_enabled` is `False`, execution routes return **503**
+`service_unavailable` with `runtime_disabled` in error details.
+
+### Example `curl` (start → get → cancel)
+
+```bash
+curl -sS -X POST "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/executions" \
+  -H "Content-Type: application/json" \
+  -H "X-Correlation-Id: 02ffae84-2764-41f3-a22a-4d4652a7c139" \
+  -d '{
+    "actor_id": "3ba213e4-3367-4e7c-9635-bcbfbad505e6",
+    "scope": {
+      "tenant_id": "53dad495-7915-439a-b03a-379452a1aa86",
+      "subject_id": "3d65c071-ac55-4847-a8f1-e3cb859d3c45",
+      "workspace_id": "workspace-42"
+    },
+    "objective_ref": "a2e57fc9-d07d-45dc-a647-76d195985d86",
+    "root_agent_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "memory_query": null,
+    "budget": {
+      "max_input_tokens": 1000,
+      "max_output_tokens": 500,
+      "max_cost_micros": 100000,
+      "deadline": "2026-08-04T12:00:00+00:00"
+    },
+    "idempotency_key": "exec-1"
+  }'
+```
+
+Expected first-write response (`201`):
+
+```json
+{ "execution_id": "<uuid>", "created": true, "status": "pending", "...": "..." }
+```
+
+Read the snapshot:
+
+```bash
+EXECUTION_ID="<uuid-from-post-response>"
+
+curl -sS "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/executions/${EXECUTION_ID}" \
+  "?subject_id=3d65c071-ac55-4847-a8f1-e3cb859d3c45" \
+  "&workspace_id=workspace-42" \
+  "&actor_id=3ba213e4-3367-4e7c-9635-bcbfbad505e6"
+```
+
+Cancel the execution:
+
+```bash
+curl -sS -X POST "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/executions/${EXECUTION_ID}/cancel" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "actor_id": "3ba213e4-3367-4e7c-9635-bcbfbad505e6",
+    "scope": {
+      "tenant_id": "53dad495-7915-439a-b03a-379452a1aa86",
+      "subject_id": "3d65c071-ac55-4847-a8f1-e3cb859d3c45",
+      "workspace_id": "workspace-42"
+    },
+    "idempotency_key": "cancel-1"
+  }'
+```
+
+Repeat the same start request to observe an idempotent replay (`200` with
+`created: false`).
 
 ## Run the example
 
