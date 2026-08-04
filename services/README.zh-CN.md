@@ -6,7 +6,7 @@
 
 本目录包含经过测试的 EngramMesh Python 3.14 服务架构脚手架，以及一个经过测试的 Episode 摄取应用切片和一个经过测试的持久化执行运行时切片。它定义了不可变的共享标识符与事件元数据、记忆模块和持久化运行时的公共契约、依赖规则、类型化进程配置、从设置装配 PostgreSQL 记忆 Handler 与运行时编排的组合根、带版本的 JSON Schema 事件契约，以及仅用于测试与开发的事务型内存 Adapter。
 
-它**不**包含 PostgreSQL 执行快照存储、外部事件分发器、依赖注入框架、模型或工具集成、投影流水线或可部署产品功能。最小 HTTP 控制 API 已暴露 Episode 摄取、Episode 读取、执行启动/快照/取消、健康探针，以及可选的 OIDC Bearer JWT 鉴权；生产加固仍属后续工作。内存 Adapter 仅在单个进程内保存状态，并不持久化。当 `temporal.enabled=true` 时，独立的 Temporal Worker 入口用于持久化工作流执行。测试通过只能证明本文所述应用契约与架构契约成立，并不表示已经存在可部署的运行时。
+它**不**包含外部事件分发器、依赖注入框架、模型或工具集成、投影流水线、运行时 Outbox 事件，或超出下文已测切片范围的可部署产品功能。最小 HTTP 控制 API 已暴露 Episode 摄取、Episode 读取、执行启动/快照/取消、健康探针，以及可选的 OIDC Bearer JWT 鉴权；生产加固仍属后续工作。内存 Adapter 仅在单个进程内保存状态，并不持久化。当 `temporal.enabled=true` 时，独立的 Temporal Worker 入口用于持久化工作流执行。测试通过只能证明本文所述应用契约与架构契约成立，并不表示已经存在可部署的运行时。
 
 ## 模块树
 
@@ -30,8 +30,10 @@ services/
 │   │   │   ├── ports.py      # 与实现无关的边界
 │   │   │   └── public.py     # 跨模块公共契约
 │   │   └── runtime/
-│   │       ├── adapters/     # 内存与 Temporal 编排 Adapter
-│   │       │   ├── in_memory/  # ExecutionIndex + InMemoryOrchestratorPort
+│   │       ├── adapters/     # 内存、PostgreSQL 与 Temporal Adapter
+│   │       │   ├── in_memory/  # InMemoryRuntimeDatabase + InMemoryOrchestratorPort
+│   │       │   ├── postgres/   # PostgresRuntimeDatabase（psycopg）
+│   │       │   ├── shared/     # postgres 与 temporal 共享的 snapshot_codec
 │   │       │   └── temporal/   # TemporalOrchestratorPort、工作流、活动
 │   │       ├── application/  # 与框架无关的执行编排
 │   │       ├── domain/       # 纯持久化执行值对象与状态转换
@@ -69,6 +71,7 @@ bootstrap/composition.py -> 应用服务 -> Port -> 领域层
 ## 权威状态边界
 
 - PostgreSQL 是持久化记忆事实、版本化记录、追加事件和持久化结构快照的权威来源。本切片中的 PostgreSQL Episode Adapter 实现了 Episode 摄取持久化；更广泛的记忆表面与行级安全（RLS）策略仍属后续工作。
+- PostgreSQL 也是两种编排器运行时启动幂等与执行 spec 指纹的权威来源。当 `temporal.enabled=false` 时，完整执行快照亦以 PostgreSQL 为权威；启用 Temporal 时，工作流查询仍是快照权威，PostgreSQL 仅保留幂等性数据。
 - Temporal Event History 将作为执行生命周期、定时器、重试和持久化工作流进度的权威来源。
 - 对象存储将作为由不可变引用寻址的大型内容的权威来源。
 - 向量索引、图存储、缓存、搜索索引和遥测是可重建投影或运行信号，绝不是主要权威来源。
@@ -222,16 +225,55 @@ PY
 `cancel_execution_handler()`。当 `modules.runtime_enabled` 为 `False` 时，均抛出
 code 为 `runtime_disabled` 的 `ConfigurationError`。
 
-### ExecutionIndex 与工作流标识
+### 运行时存储
 
-`AppRuntime` 在进程生命周期内拥有**单例** `InMemoryRuntimeDatabase`（别名
-`ExecutionIndex`）。索引映射 `(tenant_id, idempotency_key) → execution_id`，
-并在内存编排器激活时存储完整快照。
+`RuntimeDatabasePort` 是编排器的已提交运行时边界，通过回调式 `read` / `write`
+操作不可变的 `CommittedRuntimeState`（`modules/runtime/runtime_state.py`）：
+执行快照、租户作用域幂等索引与 spec 指纹。具体实现为
+`InMemoryRuntimeDatabase`（单元测试与 mock 组合）和
+`PostgresRuntimeDatabase`（生产）。
+
+```python
+from engrammesh.modules.runtime.adapters.postgres import PostgresRuntimeDatabase
+```
+
+记忆模块从 `engrammesh.modules.memory.adapters.postgres` 导入 PostgreSQL 类型；
+运行时从 `engrammesh.modules.runtime.adapters.postgres` 导入。仅这些 Adapter
+包可导入 `psycopg`。快照 JSON 编解码位于
+`adapters/shared/snapshot_codec.py`，由 PostgreSQL 与 Temporal Adapter 共享；
+PostgreSQL Adapter 不导入 Temporal。
+
+**组合选择**（`bootstrap/composition.py`）：
+
+| 条件 | 运行时数据库 | 说明 |
+|------|-------------|------|
+| Memory 连接池已打开（`PostgresMemoryDatabase`） | `PostgresRuntimeDatabase` | 共享 `postgres.dsn`，**独立**异步连接池 |
+| `runtime_enabled` 且 memory 禁用 | 无 | `ConfigurationError` `runtime_storage_unconfigured` |
+| 单元测试中 mock Memory DB | `InMemoryRuntimeDatabase` | 进程内回退 |
+
+Memory 与 Runtime 连接池使用同一 DSN 但独立打开；关闭一方不会关闭另一方。
+
+**PostgreSQL 表**（迁移 `001_runtime_execution_store.sql`）：
+
+| 表 | 用途 |
+|----|------|
+| `runtime_start_idempotency` | `(tenant_id, idempotency_key) → execution_id` + fingerprint JSONB |
+| `runtime_execution_snapshots` | 完整快照 JSONB 及反规范化 scope/status 列 |
+| `runtime_schema_migrations` | 版本化运行时 schema 应用状态 |
+
+可移植运行时数据库断言位于 `RUNTIME_DATABASE_CONTRACTS`
+（`tests/contract/runtime_database_contract.py`）；内存与 PostgreSQL  harness
+绑定而不修改断言体。
+
+### 工作流标识
+
+两种编排器在 `AppRuntime` 生命周期内共享一个 `RuntimeDatabasePort` 实例。
+启动幂等与指纹经该 Port 在 `start_workflow` 之前持久化；精确重放描述已有
+工作流而非创建新工作流。
 
 **工作流 ID 方案：** `{tenant_id}:{execution_id}`。`InMemoryOrchestratorPort`
 与 `TemporalOrchestratorPort` 均使用该格式。`get_snapshot` 通过租户与执行 id
-解析工作流，无需反向索引。启动幂等性在 `start_workflow` 之前使用
-`ExecutionIndex`；重放时描述已有工作流而非创建新工作流。
+解析工作流，无需反向索引。
 
 `StartExecutionHandler` 通过比较返回快照的 `execution_id` 与新生成的 id 推断
 `created`：首次调用 → `created=True`；精确幂等重放返回已存储 id →
@@ -251,16 +293,17 @@ Memory 与 Runtime 启动相互独立；memory 禁用时仍可使用运行时 Ha
 
 | 关注点 | `temporal.enabled=false` | `temporal.enabled=true` |
 |--------|--------------------------|-------------------------|
-| 快照权威 | `ExecutionIndex`（进程内） | Temporal 工作流查询 `current_snapshot` |
-| 持久性 | 无（进程内） | Temporal Event History |
+| PostgreSQL 存储 | 幂等 + 指纹 + 快照 | 仅幂等 + 指纹 |
+| 快照权威 | PostgreSQL（`runtime_execution_snapshots`） | Temporal 工作流查询 `current_snapshot` |
+| 持久性 | PostgreSQL | Temporal Event History（+ PG 幂等） |
 | Worker | 不需要 | `bootstrap/worker.py` 在配置的任务队列上运行 |
 | SDK 边界 | 不适用 | `temporalio` 仅限 `adapters/temporal/` 与 `worker.py` |
 
 `InMemoryOrchestratorPort` 实现完整 `OrchestratorPort` 契约，包括幂等指纹、
-租户作用域读取与取消状态转换。`TemporalOrchestratorPort` 共享同一
-`ExecutionIndex` 处理启动幂等，并将生命周期委托给 `ExecutionLifecycleWorkflow`
-及桩活动（`advance_to_planning`、`advance_to_running`、`advance_to_succeeded`）。
-SDK 错误包装为 `OrchestrationUnavailable`。
+租户作用域读取与取消状态转换；快照经 `RuntimeDatabasePort` 提交。
+`TemporalOrchestratorPort` 共享同一 Port 处理启动幂等，并将生命周期委托给
+`ExecutionLifecycleWorkflow` 及桩活动（`advance_to_planning`、`advance_to_running`、
+`advance_to_succeeded`）。SDK 错误包装为 `OrchestrationUnavailable`。
 
 可移植编排器断言位于 `ORCHESTRATOR_PORT_CONTRACTS`
 （`tests/contract/orchestrator_adapter_contract.py`）；内存 Adapter 率先绑定。
@@ -302,11 +345,14 @@ Temporal 测试使用 `WorkflowEnvironment` 时间跳过，验证工作流完成
 
 本切片明确不包含：
 
-- PostgreSQL 执行快照存储与运行时 Outbox 事件（Slice 4 — 后续 ④b）
+- 运行时 Outbox 事件与执行生命周期事件发布（后续 ④c）
+- 执行列表 HTTP API（后续 ④d）
+- Temporal → PostgreSQL 快照投影（后续 ④e）
 - LangGraph、PlannerPort、AgentEnginePort、完整 Plan DAG 执行
 - Claim 提取（Phase 2）
 
-详见 `docs/rfcs/2026-07-31-temporal-runtime-adapter.md` 与
+详见 `docs/rfcs/2026-08-04-execution-snapshot-store.md`、
+`docs/rfcs/2026-07-31-temporal-runtime-adapter.md` 与
 `docs/superpowers/specs/2026-07-31-temporal-runtime-adapter-design.md`。
 
 ## Outbox Relay

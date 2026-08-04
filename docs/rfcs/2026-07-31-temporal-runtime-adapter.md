@@ -125,6 +125,6 @@ See spec acceptance criteria (8 items), including:
 ③ OIDC tenant context                            ✅
 ④ Temporal runtime adapter                       ✅
    ④a Execution HTTP API                         ✅
-   ④b Execution snapshot store (PostgreSQL)      ← Slice 4; replaces in-process ExecutionIndex
+   ④b Execution snapshot store (PostgreSQL)      ✅
 ⑤ Claim extraction processor                     ← Phase 2 entry
 ```
