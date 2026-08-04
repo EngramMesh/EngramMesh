@@ -1,0 +1,244 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://engrammesh.org/contracts/runtime/v1/execution-snapshot-response.schema.json",
+  "version": "1.0.0",
+  "title": "Runtime Execution Snapshot HTTP Response",
+  "description": "Version 1.0.0 contract for durable execution snapshot HTTP responses.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "execution_id",
+    "scope",
+    "revision",
+    "status",
+    "node_statuses",
+    "updated_at"
+  ],
+  "properties": {
+    "execution_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "scope": {
+      "$ref": "#/$defs/httpMemoryScope"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "status": {
+      "$ref": "#/$defs/executionStatus"
+    },
+    "plan_revision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "node_statuses": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/nodeStatus"
+      }
+    },
+    "suspension": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/suspension"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "result_ref": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "failure": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/failure"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    }
+  },
+  "$defs": {
+    "httpMemoryScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenant_id",
+        "subject_id"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "subject_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "workspace_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "agent_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        }
+      }
+    },
+    "executionStatus": {
+      "enum": [
+        "pending",
+        "planning",
+        "running",
+        "waiting",
+        "retrying",
+        "cancelling",
+        "compensating",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "nodeStatus": {
+      "enum": [
+        "pending",
+        "ready",
+        "running",
+        "waiting",
+        "retrying",
+        "cancelling",
+        "compensating",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "skipped",
+        "compensated"
+      ]
+    },
+    "failureCategory": {
+      "enum": [
+        "transient",
+        "intermittent",
+        "permanent",
+        "user_fixable",
+        "policy_blocked",
+        "system_defect"
+      ]
+    },
+    "suspensionKind": {
+      "enum": [
+        "approval",
+        "input",
+        "external_event"
+      ]
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category",
+        "code",
+        "message"
+      ],
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/failureCategory"
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "details_ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        }
+      }
+    },
+    "suspension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "idempotency_key",
+        "execution_id",
+        "kind",
+        "request_ref",
+        "requested_at",
+        "expires_at"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "execution_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "node_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "kind": {
+          "$ref": "#/$defs/suspensionKind"
+        },
+        "request_ref": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "requested_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+        }
+      }
+    }
+  }
+}
