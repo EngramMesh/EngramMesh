@@ -59,8 +59,8 @@ is enabled.
 
 ## 7. Testing
 
-Unit (mappers, auth), HTTP integration (in-memory orchestrator), OIDC integration,
-contract tests, composed start→get→cancel E2E. See spec §9.
+See spec §9. Required scenarios include: composed start→get→cancel flow, OIDC staging
+with injected verifier, mapper JSON Schema round-trip, and `MemoryQueryScopeMismatchError` → 422.
 
 ## 8. Acceptance
 

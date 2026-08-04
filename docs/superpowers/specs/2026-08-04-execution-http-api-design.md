@@ -2,6 +2,7 @@
 
 - **Status**: Approved
 - **Date**: 2026-08-04
+- **Revision**: 2 (plan review — expanded error mapping, tests, acceptance)
 - **Type**: Public API / implementation design
 - **Related roadmap**: Phase 1 — production foundation and single-agent vertical slice
 - **Prerequisites**: Temporal runtime adapter (Slice 2), OIDC tenant context, Episode HTTP APIs
@@ -277,8 +278,10 @@ Register handlers in `bootstrap/http/errors.py`:
 | `OrchestrationUnavailable` | 503 | `orchestration_unavailable` | orchestration backend is unavailable |
 | `ConfigurationError` (`runtime_disabled`) | 503 | `service_unavailable` | service is unavailable |
 | `TenantMismatchError` | 422 | `validation_error` | (details on `scope.tenant_id`) |
+| `MemoryQueryScopeMismatchError` | 422 | `validation_error` | `memory_query.scope` must match execution `scope` |
 | `ActorIdRequiredError` | 422 | `actor_id_required` | |
 | `ActorIdNotAllowedError` | 422 | `actor_id_not_allowed` | |
+| `InvalidCorrelationIdError` | 422 | `validation_error` | (details on `X-Correlation-Id`) |
 
 Reuse existing OIDC handlers (`authentication_required`, `invalid_token`,
 `tenant_access_denied`) and generic handlers (`validation_error`, `internal_error`).
@@ -300,8 +303,10 @@ Publish under `packages/contracts/jsonschema/runtime/v1/`:
 Reuse a shared `$defs/httpMemoryScope` (include `tenant_id`) consistent with memory
 HTTP schemas. `memory_query.scope` uses the same scope def.
 
-Contract tests validate Pydantic serialization against these schemas (mirror episode
-read contract test style).
+Contract tests validate golden JSON examples against these schemas. Additionally,
+`snapshot_to_response(...).model_dump(mode="json")` from the HTTP mappers must
+validate against `execution-snapshot-response.schema.json` (and start response
+against `start-execution-response.schema.json`) to prevent mapper/schema drift.
 
 ## 8. File changes (implementation scope)
 
@@ -323,7 +328,8 @@ is discovered during implementation.
 - Mappers: start/get/cancel command construction; tenant mismatch; actor_id rules;
   memory_query scope match validation
 - `TenantScopedRuntimeAuthorization`: allow matching principal; deny mismatch
-- Pydantic schemas: reject extra fields, invalid enums
+- Pydantic schemas: reject extra fields, blank `idempotency_key`, negative budget fields
+- `create_runtime_authorization` selects `TenantScopedRuntimeAuthorization` when OIDC enabled
 
 ### 9.2 HTTP integration (in-memory orchestrator, `runtime_enabled=true`)
 
@@ -336,26 +342,31 @@ is discovered during implementation.
 | GET unknown id → 404 | Not found |
 | GET wrong subject → 404 | Scope isolation |
 | POST cancel running execution → 200 `cancelled` | Cancel path |
-| POST cancel succeeded execution → 409 | Invalid transition |
+| POST cancel succeeded execution → 409 | Invalid transition (seed via orchestrator DB write) |
+| POST cancel body tenant mismatch → 422 | `validation_error` on `scope.tenant_id` |
+| GET missing `actor_id` (OIDC off) → 422 | `actor_id_required` |
+| POST start invalid `X-Correlation-Id` → 422 | Reuses `parse_correlation_id` |
 | `runtime_enabled=false` → 503 | Configuration gate |
 | staging + `oidc.enabled=false` → 403 | Environment gate regression |
 
 ### 9.3 OIDC integration
 
-- Bearer JWT on start/get/cancel when `oidc.enabled=true`
-- `actor_id` in body/query rejected when principal present
+- Missing Bearer on start/get/cancel → 401
+- Valid Bearer on start/get/cancel → 201/200 (no `actor_id` in body/query)
+- `actor_id` in body/query when principal present → 422 `actor_id_not_allowed`
 - Path tenant mismatch with JWT tenant → 403 `tenant_access_denied`
-- Missing Bearer → 401
+- staging + `oidc.enabled=true` + injected `token_verifier` → start allowed (mirrors episode OIDC regression)
 
 ### 9.4 Composed E2E
 
-Single HTTP test flow: start → poll/get snapshot until terminal or `running` → cancel
-(using in-memory orchestrator; no Temporal required for default CI).
+Single named HTTP test `test_start_get_cancel_composed_flow`: POST start → GET snapshot
+→ POST cancel (in-memory orchestrator; no Temporal required for default CI).
 
 ### 9.5 Contract
 
-- Response bodies validate against JSON Schema fixtures
-- Request schema files have contract tests with golden examples
+- Golden request/response dicts validate against JSON Schema files
+- Mapper output (`snapshot_to_response`, `start_result_to_response`) validates against
+  response schemas after serialization
 
 ## 10. Acceptance criteria
 
@@ -365,8 +376,9 @@ Single HTTP test flow: start → poll/get snapshot until terminal or `running` �
 4. Local curl (dev, OIDC off): start → get → cancel succeeds against in-memory runtime.
 5. OIDC integration tests pass with injected `token_verifier`.
 6. No adapter imports in `bootstrap/http/`.
-7. Bilingual services README documents endpoints, errors, OIDC behavior, and `runtime_disabled`.
-8. RFC summary committed and references this spec as authority.
+7. Bilingual services README documents endpoints, errors, OIDC behavior, and `runtime_disabled`; root README non-goals no longer claim execution HTTP is missing.
+8. `CHANGELOG.md` Unreleased section updated; RFC follow-up chains mark ④a complete when shipped.
+9. RFC summary committed and references this spec as authority.
 
 ## 11. Follow-up
 
