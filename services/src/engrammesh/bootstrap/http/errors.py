@@ -79,6 +79,23 @@ def error_envelope(
     }
 
 
+def _json_safe_validation_details(
+    errors: list[dict[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    """Normalize FastAPI/Pydantic validation errors for JSON responses."""
+    safe: list[dict[str, Any]] = []
+    for error in errors:
+        item = dict(error)
+        ctx = item.get("ctx")
+        if isinstance(ctx, dict):
+            item["ctx"] = {
+                key: str(value) if isinstance(value, BaseException) else value
+                for key, value in ctx.items()
+            }
+        safe.append(item)
+    return tuple(safe)
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Register HTTP exception handlers for control API error mapping."""
 
@@ -358,7 +375,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=error_envelope(
                 "validation_error",
                 _VALIDATION_ERROR_MESSAGE,
-                details=tuple(exc.errors()),
+                details=_json_safe_validation_details(list(exc.errors())),
             ),
         )
 

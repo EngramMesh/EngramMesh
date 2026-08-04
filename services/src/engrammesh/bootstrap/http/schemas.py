@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from engrammesh.modules.memory.domain.model import (
     RetentionClass,
@@ -22,6 +22,20 @@ class _HttpSchemaModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+def _require_non_blank(value: str, field_name: str) -> str:
+    if not value.strip():
+        msg = f"{field_name} must not be blank"
+        raise ValueError(msg)
+    return value
+
+
+def _require_timezone_aware(value: datetime, field_name: str) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        msg = f"{field_name} must be timezone-aware"
+        raise ValueError(msg)
+    return value
+
+
 class ScopeRequest(_HttpSchemaModel):
     """HTTP memory scope with tenant_id for path/body consistency checks."""
 
@@ -29,6 +43,13 @@ class ScopeRequest(_HttpSchemaModel):
     subject_id: UUID
     workspace_id: str | None = None
     agent_id: UUID | None = None
+
+    @field_validator("workspace_id")
+    @classmethod
+    def _validate_workspace_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _require_non_blank(value, "workspace_id")
 
 
 class RecordEpisodeRequest(_HttpSchemaModel):
@@ -86,13 +107,6 @@ class ListEpisodesResponse(_HttpSchemaModel):
     next_cursor: str | None
 
 
-def _require_non_blank(value: str, field_name: str) -> str:
-    if not value.strip():
-        msg = f"{field_name} must not be blank"
-        raise ValueError(msg)
-    return value
-
-
 class BudgetRequest(_HttpSchemaModel):
     """HTTP request body for execution budget limits."""
 
@@ -100,6 +114,11 @@ class BudgetRequest(_HttpSchemaModel):
     max_output_tokens: int = Field(ge=0)
     max_cost_micros: int = Field(ge=0)
     deadline: datetime
+
+    @field_validator("deadline")
+    @classmethod
+    def _validate_deadline(cls, value: datetime) -> datetime:
+        return _require_timezone_aware(value, "deadline")
 
 
 class MemoryQueryRequest(_HttpSchemaModel):
@@ -111,6 +130,28 @@ class MemoryQueryRequest(_HttpSchemaModel):
     valid_at: datetime | None = None
     recorded_at: datetime | None = None
     limit: int = Field(default=10, gt=0)
+
+    @field_validator("query_id")
+    @classmethod
+    def _validate_query_id(cls, value: str) -> str:
+        return _require_non_blank(value, "query_id")
+
+    @field_validator("text")
+    @classmethod
+    def _validate_text(cls, value: str) -> str:
+        return _require_non_blank(value, "text")
+
+    @field_validator("valid_at", "recorded_at")
+    @classmethod
+    def _validate_optional_timestamps(
+        cls,
+        value: datetime | None,
+        info: ValidationInfo,
+    ) -> datetime | None:
+        if value is None:
+            return None
+        field_name = info.field_name or "timestamp"
+        return _require_timezone_aware(value, field_name)
 
 
 class StartExecutionRequest(_HttpSchemaModel):

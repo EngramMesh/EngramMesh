@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from engrammesh.bootstrap.http.schemas import (
     BudgetRequest,
     CancelExecutionRequest,
+    MemoryQueryRequest,
     ScopeRequest,
     StartExecutionRequest,
 )
@@ -117,3 +118,44 @@ def test_budget_request_rejects_negative_values(field_name: str) -> None:
     values[field_name] = -1
     with pytest.raises(ValidationError):
         BudgetRequest(**values)
+
+
+def test_budget_request_rejects_naive_deadline() -> None:
+    with pytest.raises(ValidationError, match="deadline must be timezone-aware"):
+        BudgetRequest(
+            max_input_tokens=1000,
+            max_output_tokens=500,
+            max_cost_micros=100_000,
+            deadline=datetime(2026, 8, 4, 12, 0),  # noqa: DTZ001
+        )
+
+
+@pytest.mark.parametrize("field_name", ("query_id", "text"))
+def test_memory_query_request_rejects_blank_strings(field_name: str) -> None:
+    values = {
+        "query_id": "query-1",
+        "scope": _scope(),
+        "text": "find context",
+    }
+    values[field_name] = " "
+    with pytest.raises(ValidationError, match=field_name):
+        MemoryQueryRequest(**values)
+
+
+def test_memory_query_request_rejects_naive_valid_at() -> None:
+    with pytest.raises(ValidationError, match="valid_at must be timezone-aware"):
+        MemoryQueryRequest(
+            query_id="query-1",
+            scope=_scope(),
+            text="find context",
+            valid_at=datetime(2026, 8, 4, 12, 0),  # noqa: DTZ001
+        )
+
+
+def test_scope_request_rejects_blank_workspace_id() -> None:
+    with pytest.raises(ValidationError, match="workspace_id must not be blank"):
+        ScopeRequest(
+            tenant_id=TENANT,
+            subject_id=SUBJECT,
+            workspace_id=" ",
+        )
