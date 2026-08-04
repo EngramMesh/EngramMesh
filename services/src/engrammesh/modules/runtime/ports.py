@@ -1,6 +1,6 @@
 """Async, framework-neutral ports for durable multi-Agent execution."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol, runtime_checkable
@@ -18,6 +18,7 @@ from engrammesh.modules.runtime.domain.model import (
     ToolDescriptor,
     ToolResult,
 )
+from engrammesh.modules.runtime.runtime_state import CommittedRuntimeState
 from engrammesh.shared.kernel.ids import ArtifactId, ExecutionId, SubjectId
 
 RuntimeAction = Literal["start_execution", "get_execution", "cancel_execution"]
@@ -157,3 +158,15 @@ class RuntimeIdentityPort(Protocol):
 @runtime_checkable
 class ClockPort(Protocol):
     async def now(self) -> datetime: ...
+
+
+@runtime_checkable
+class RuntimeDatabasePort(Protocol):
+    async def read[T](
+        self, callback: Callable[[CommittedRuntimeState], T]
+    ) -> T: ...
+
+    async def write(
+        self,
+        callback: Callable[[CommittedRuntimeState], CommittedRuntimeState],
+    ) -> None: ...

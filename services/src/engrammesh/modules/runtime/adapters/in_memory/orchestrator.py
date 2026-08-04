@@ -8,10 +8,6 @@ from types import MappingProxyType
 from typing import final
 
 from engrammesh.modules.memory.public import MemoryScope
-from engrammesh.modules.runtime.adapters.in_memory.database import (
-    InMemoryRuntimeDatabase,
-    _CommittedRuntimeState,
-)
 from engrammesh.modules.runtime.domain.errors import (
     ExecutionIdempotencyConflict,
     ExecutionNotFound,
@@ -23,7 +19,8 @@ from engrammesh.modules.runtime.domain.model import (
     ExecutionStatus,
 )
 from engrammesh.modules.runtime.domain.state import can_transition_execution
-from engrammesh.modules.runtime.ports import ClockPort
+from engrammesh.modules.runtime.ports import ClockPort, RuntimeDatabasePort
+from engrammesh.modules.runtime.runtime_state import CommittedRuntimeState
 from engrammesh.shared.kernel.ids import ExecutionId, TenantId
 
 
@@ -62,7 +59,7 @@ def _workflow_id(tenant_id: TenantId, execution_id: ExecutionId) -> str:
 
 
 def _snapshot_for_scope(
-    state: _CommittedRuntimeState,
+    state: CommittedRuntimeState,
     scope: MemoryScope,
     execution_id: ExecutionId,
 ) -> ExecutionSnapshot:
@@ -73,9 +70,9 @@ def _snapshot_for_scope(
 
 
 def _commit_snapshot(
-    state: _CommittedRuntimeState,
+    state: CommittedRuntimeState,
     snapshot: ExecutionSnapshot,
-) -> _CommittedRuntimeState:
+) -> CommittedRuntimeState:
     snapshots = dict(state.snapshots)
     snapshots[snapshot.execution_id] = snapshot
     return replace(
@@ -141,13 +138,13 @@ class InMemoryOrchestratorPort:
     def __init__(
         self,
         clock: ClockPort,
-        database: InMemoryRuntimeDatabase,
+        database: RuntimeDatabasePort,
     ) -> None:
         self._clock = clock
         self._database = database
 
     @property
-    def database(self) -> InMemoryRuntimeDatabase:
+    def database(self) -> RuntimeDatabasePort:
         return self._database
 
     async def start(self, spec: ExecutionSpec) -> ExecutionSnapshot:
@@ -155,7 +152,7 @@ class InMemoryOrchestratorPort:
         index_key = (spec.scope.tenant_id, spec.idempotency_key)
         updated_at = await self._clock.now()
 
-        def _start(state: _CommittedRuntimeState) -> _CommittedRuntimeState:
+        def _start(state: CommittedRuntimeState) -> CommittedRuntimeState:
             existing_id = state.idempotency_index.get(index_key)
             if existing_id is not None:
                 stored_fingerprint = state.fingerprints.get(existing_id)
@@ -181,7 +178,7 @@ class InMemoryOrchestratorPort:
             idempotency_index[index_key] = snapshot.execution_id
             fingerprints = dict(state.fingerprints)
             fingerprints[snapshot.execution_id] = fingerprint
-            return _CommittedRuntimeState(
+            return CommittedRuntimeState(
                 snapshots=MappingProxyType(snapshots),
                 idempotency_index=MappingProxyType(idempotency_index),
                 fingerprints=MappingProxyType(fingerprints),
@@ -210,7 +207,7 @@ class InMemoryOrchestratorPort:
         del idempotency_key
         updated_at = await self._clock.now()
 
-        def _cancel(state: _CommittedRuntimeState) -> _CommittedRuntimeState:
+        def _cancel(state: CommittedRuntimeState) -> CommittedRuntimeState:
             snapshot = _snapshot_for_scope(state, scope, execution_id)
             cancelled = _cancel_snapshot(snapshot, updated_at=updated_at)
             if cancelled is snapshot:

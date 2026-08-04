@@ -12,10 +12,6 @@ from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
 
 from engrammesh.modules.memory.public import MemoryScope
-from engrammesh.modules.runtime.adapters.in_memory.database import (
-    InMemoryRuntimeDatabase,
-    _CommittedRuntimeState,
-)
 from engrammesh.modules.runtime.adapters.temporal.mappers import (
     payload_to_snapshot,
     spec_to_payload,
@@ -35,7 +31,8 @@ from engrammesh.modules.runtime.domain.model import (
     ExecutionSpec,
     ExecutionStatus,
 )
-from engrammesh.modules.runtime.ports import ClockPort
+from engrammesh.modules.runtime.ports import ClockPort, RuntimeDatabasePort
+from engrammesh.modules.runtime.runtime_state import CommittedRuntimeState
 from engrammesh.shared.kernel.ids import ExecutionId, TenantId
 
 
@@ -90,7 +87,7 @@ class TemporalOrchestratorPort:
         client: Client,
         *,
         task_queue: str,
-        index: InMemoryRuntimeDatabase,
+        index: RuntimeDatabasePort,
         clock: ClockPort,
     ) -> None:
         self._client = client
@@ -99,7 +96,7 @@ class TemporalOrchestratorPort:
         self._clock = clock
 
     @property
-    def index(self) -> InMemoryRuntimeDatabase:
+    def index(self) -> RuntimeDatabasePort:
         return self._index
 
     async def start(self, spec: ExecutionSpec) -> ExecutionSnapshot:
@@ -107,7 +104,7 @@ class TemporalOrchestratorPort:
         index_key = (spec.scope.tenant_id, spec.idempotency_key)
         start_result: dict[str, object] = {"is_new": False, "execution_id": None}
 
-        def _register(state: _CommittedRuntimeState) -> _CommittedRuntimeState:
+        def _register(state: CommittedRuntimeState) -> CommittedRuntimeState:
             existing_id = state.idempotency_index.get(index_key)
             if existing_id is not None:
                 stored_fingerprint = state.fingerprints.get(existing_id)
@@ -198,7 +195,7 @@ class TemporalOrchestratorPort:
     ) -> None:
         index_key = (tenant_id, idempotency_key)
 
-        def _rollback(state: _CommittedRuntimeState) -> _CommittedRuntimeState:
+        def _rollback(state: CommittedRuntimeState) -> CommittedRuntimeState:
             if state.idempotency_index.get(index_key) != execution_id:
                 return state
             idempotency_index = dict(state.idempotency_index)
