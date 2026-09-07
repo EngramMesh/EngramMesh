@@ -183,6 +183,11 @@ class RuntimeOutboxWriterPort(Protocol):
 
 
 @runtime_checkable
+class RuntimeSnapshotWriterPort(Protocol):
+    async def upsert_snapshot(self, snapshot: ExecutionSnapshot) -> None: ...
+
+
+@runtime_checkable
 class RuntimeOutboxRelayStore(Protocol):
     async def fetch_unpublished(self, *, limit: int) -> tuple[EventEnvelope, ...]: ...
 
@@ -219,3 +224,14 @@ class RuntimeDatabasePort(Protocol):
             Awaitable[CommittedRuntimeState],
         ],
     ) -> None: ...
+
+
+@runtime_checkable
+class ExecutionSnapshotStore(Protocol):
+    async def stream(
+        self,
+        scope: MemoryScope,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> tuple[ExecutionSnapshot, ...]: ...
