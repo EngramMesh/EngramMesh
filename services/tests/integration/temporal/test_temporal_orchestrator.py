@@ -37,6 +37,7 @@ from engrammesh.modules.runtime.domain.model import (
     ExecutionSpec,
     ExecutionStatus,
 )
+from engrammesh.modules.runtime.ports import RuntimeOutboxPort
 from engrammesh.modules.runtime.runtime_state import CommittedRuntimeState
 from engrammesh.shared.kernel.ids import (
     AgentDefinitionId,
@@ -330,7 +331,11 @@ async def test_temporal_recovers_orphaned_index_entry() -> None:
         fingerprint = _spec_fingerprint(spec)
         index_key = (spec.scope.tenant_id, spec.idempotency_key)
 
-        def _seed_orphan(state: CommittedRuntimeState) -> CommittedRuntimeState:
+        async def _seed_orphan(
+            state: CommittedRuntimeState,
+            outbox: RuntimeOutboxPort,
+        ) -> CommittedRuntimeState:
+            del outbox
             idempotency_index = dict(state.idempotency_index)
             idempotency_index[index_key] = spec.id
             fingerprints = dict(state.fingerprints)

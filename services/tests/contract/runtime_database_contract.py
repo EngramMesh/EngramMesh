@@ -12,7 +12,7 @@ import pytest
 
 from engrammesh.modules.memory.public import MemoryScope
 from engrammesh.modules.runtime.domain.model import ExecutionSnapshot, ExecutionStatus
-from engrammesh.modules.runtime.ports import RuntimeDatabasePort
+from engrammesh.modules.runtime.ports import RuntimeDatabasePort, RuntimeOutboxPort
 from engrammesh.modules.runtime.runtime_state import (
     CommittedRuntimeState,
     empty_runtime_state,
@@ -61,7 +61,11 @@ async def assert_write_persists_idempotency_and_fingerprint(
     execution_id = ExecutionId.new()
     fingerprint = (str(tenant_id), "contract-fp")
 
-    def _register(state: CommittedRuntimeState) -> CommittedRuntimeState:
+    async def _register(
+        state: CommittedRuntimeState,
+        outbox: RuntimeOutboxPort,
+    ) -> CommittedRuntimeState:
+        del outbox
         idempotency_index = dict(state.idempotency_index)
         idempotency_index[(tenant_id, "start-key")] = execution_id
         fingerprints = dict(state.fingerprints)
@@ -88,7 +92,11 @@ async def assert_write_persists_snapshot(
     database = await make_database()
     snapshot = contract_snapshot()
 
-    def _persist(state: CommittedRuntimeState) -> CommittedRuntimeState:
+    async def _persist(
+        state: CommittedRuntimeState,
+        outbox: RuntimeOutboxPort,
+    ) -> CommittedRuntimeState:
+        del outbox
         snapshots = dict(state.snapshots)
         snapshots[snapshot.execution_id] = snapshot
         return replace(state, snapshots=MappingProxyType(snapshots))
@@ -108,7 +116,11 @@ async def assert_write_replaces_state_atomically(
     execution_id = ExecutionId.new()
     snapshot = contract_snapshot()
 
-    def _seed(state: CommittedRuntimeState) -> CommittedRuntimeState:
+    async def _seed(
+        state: CommittedRuntimeState,
+        outbox: RuntimeOutboxPort,
+    ) -> CommittedRuntimeState:
+        del outbox
         idempotency_index = dict(state.idempotency_index)
         idempotency_index[(tenant_id, "seed-key")] = execution_id
         fingerprints = dict(state.fingerprints)
@@ -124,8 +136,11 @@ async def assert_write_replaces_state_atomically(
     await database.write(_seed)
 
     with pytest.raises(RuntimeError, match="contract write failure"):
-        def _fail(state: CommittedRuntimeState) -> CommittedRuntimeState:
-            del state
+        async def _fail(
+            state: CommittedRuntimeState,
+            outbox: RuntimeOutboxPort,
+        ) -> CommittedRuntimeState:
+            del state, outbox
             raise RuntimeError("contract write failure")
 
         await database.write(_fail)
@@ -136,7 +151,14 @@ async def assert_write_replaces_state_atomically(
     assert after_failure.snapshots[snapshot.execution_id] == snapshot
     assert after_failure.idempotency_index[(tenant_id, "seed-key")] == execution_id
 
-    await database.write(lambda state: empty_runtime_state())
+    async def _clear(
+        state: CommittedRuntimeState,
+        outbox: RuntimeOutboxPort,
+    ) -> CommittedRuntimeState:
+        del state, outbox
+        return empty_runtime_state()
+
+    await database.write(_clear)
 
     cleared = await database.read(lambda state: state)
     assert cleared == empty_runtime_state()

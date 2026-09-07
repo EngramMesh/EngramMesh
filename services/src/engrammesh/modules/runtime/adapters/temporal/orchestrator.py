@@ -31,7 +31,11 @@ from engrammesh.modules.runtime.domain.model import (
     ExecutionSpec,
     ExecutionStatus,
 )
-from engrammesh.modules.runtime.ports import ClockPort, RuntimeDatabasePort
+from engrammesh.modules.runtime.ports import (
+    ClockPort,
+    RuntimeDatabasePort,
+    RuntimeOutboxPort,
+)
 from engrammesh.modules.runtime.runtime_state import CommittedRuntimeState
 from engrammesh.shared.kernel.ids import ExecutionId, TenantId
 
@@ -104,7 +108,11 @@ class TemporalOrchestratorPort:
         index_key = (spec.scope.tenant_id, spec.idempotency_key)
         start_result: dict[str, object] = {"is_new": False, "execution_id": None}
 
-        def _register(state: CommittedRuntimeState) -> CommittedRuntimeState:
+        async def _register(
+            state: CommittedRuntimeState,
+            outbox: RuntimeOutboxPort,
+        ) -> CommittedRuntimeState:
+            del outbox
             existing_id = state.idempotency_index.get(index_key)
             if existing_id is not None:
                 stored_fingerprint = state.fingerprints.get(existing_id)
@@ -195,7 +203,11 @@ class TemporalOrchestratorPort:
     ) -> None:
         index_key = (tenant_id, idempotency_key)
 
-        def _rollback(state: CommittedRuntimeState) -> CommittedRuntimeState:
+        async def _rollback(
+            state: CommittedRuntimeState,
+            outbox: RuntimeOutboxPort,
+        ) -> CommittedRuntimeState:
+            del outbox
             if state.idempotency_index.get(index_key) != execution_id:
                 return state
             idempotency_index = dict(state.idempotency_index)

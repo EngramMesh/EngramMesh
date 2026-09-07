@@ -10,6 +10,7 @@ import pytest
 from engrammesh.modules.runtime.adapters.postgres.database import (
     PostgresRuntimeDatabase,
 )
+from engrammesh.modules.runtime.ports import RuntimeOutboxPort
 from engrammesh.modules.runtime.runtime_state import CommittedRuntimeState
 from engrammesh.shared.kernel.ids import ExecutionId, TenantId
 
@@ -26,7 +27,11 @@ async def test_runtime_database_write_then_read_round_trip(
         tenant_id = TenantId.new()
         execution_id = ExecutionId.new()
 
-        def _register(state):
+        async def _register(
+            state: CommittedRuntimeState,
+            outbox: RuntimeOutboxPort,
+        ) -> CommittedRuntimeState:
+            del outbox
             idempotency_index = dict(state.idempotency_index)
             idempotency_index[(tenant_id, "start-key")] = execution_id
             fingerprints = dict(state.fingerprints)
@@ -61,7 +66,11 @@ async def test_concurrent_idempotency_registration_is_idempotent(
         key = "concurrent-start"
         shared_fingerprint = (str(tenant_id), "race-fp")
 
-        def _register(state: CommittedRuntimeState) -> CommittedRuntimeState:
+        async def _register(
+            state: CommittedRuntimeState,
+            outbox: RuntimeOutboxPort,
+        ) -> CommittedRuntimeState:
+            del outbox
             index_key = (tenant_id, key)
             existing_id = state.idempotency_index.get(index_key)
             if existing_id is not None:
