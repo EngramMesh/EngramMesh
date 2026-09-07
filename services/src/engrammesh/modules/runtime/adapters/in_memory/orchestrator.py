@@ -186,7 +186,11 @@ class InMemoryOrchestratorPort:
 
         await self._database.write(_start)
         return await self._database.read(
-            lambda state: state.snapshots[state.idempotency_index[index_key]]
+            lambda state: _snapshot_for_scope(
+                state,
+                spec.scope,
+                state.idempotency_index[index_key],
+            )
         )
 
     async def get_snapshot(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
 from uuid import UUID
 
 import pytest
@@ -15,6 +16,7 @@ from engrammesh.modules.runtime.adapters.in_memory.database import (
 )
 from engrammesh.modules.runtime.adapters.in_memory.orchestrator import (
     InMemoryOrchestratorPort,
+    _spec_fingerprint,
 )
 from engrammesh.modules.runtime.domain.errors import (
     ExecutionIdempotencyConflict,
@@ -26,6 +28,7 @@ from engrammesh.modules.runtime.domain.model import (
     ExecutionSpec,
     ExecutionStatus,
 )
+from engrammesh.modules.runtime.runtime_state import CommittedRuntimeState
 from engrammesh.shared.kernel.ids import (
     AgentDefinitionId,
     ArtifactId,
@@ -115,6 +118,36 @@ async def test_start_conflict_on_mismatched_replay(
 
     with pytest.raises(ExecutionIdempotencyConflict):
         await orchestrator.start(different_scope)
+
+
+@pytest.mark.asyncio
+async def test_start_replay_without_snapshot_raises_not_found(
+    orchestrator: InMemoryOrchestratorPort,
+) -> None:
+    spec = _spec(key="orphan-idem")
+    fingerprint = _spec_fingerprint(spec)
+    index_key = (spec.scope.tenant_id, spec.idempotency_key)
+    execution_id = ExecutionId.new()
+
+    def _seed_idempotency_only(
+        state: CommittedRuntimeState,
+    ) -> CommittedRuntimeState:
+        idempotency_index = dict(state.idempotency_index)
+        idempotency_index[index_key] = execution_id
+        fingerprints = dict(state.fingerprints)
+        fingerprints[execution_id] = fingerprint
+        return CommittedRuntimeState(
+            snapshots=state.snapshots,
+            idempotency_index=MappingProxyType(idempotency_index),
+            fingerprints=MappingProxyType(fingerprints),
+        )
+
+    await orchestrator.database.write(_seed_idempotency_only)
+
+    with pytest.raises(ExecutionNotFound):
+        await orchestrator.start(
+            _spec(execution_id=ExecutionId.new(), key="orphan-idem")
+        )
 
 
 @pytest.mark.asyncio
