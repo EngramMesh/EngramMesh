@@ -74,5 +74,6 @@ See spec §10.
 ④ Temporal runtime adapter                       ✅
    ④a Execution HTTP API + OIDC runtime auth      ✅
    ④b Execution snapshot store (PostgreSQL)      ✅
+   ④c Runtime Outbox + execution lifecycle events   ✅
 ⑤ Claim extraction processor                     ← Phase 2 entry
 ```

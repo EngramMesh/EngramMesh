@@ -345,13 +345,13 @@ Temporal 测试使用 `WorkflowEnvironment` 时间跳过，验证工作流完成
 
 本切片明确不包含：
 
-- 运行时 Outbox 事件与执行生命周期事件发布（后续 ④c）
 - 执行列表 HTTP API（后续 ④d）
 - Temporal → PostgreSQL 快照投影（后续 ④e）
 - LangGraph、PlannerPort、AgentEnginePort、完整 Plan DAG 执行
 - Claim 提取（Phase 2）
 
-详见 `docs/rfcs/2026-08-04-execution-snapshot-store.md`、
+详见 `docs/rfcs/2026-09-07-runtime-outbox.md`、
+`docs/rfcs/2026-08-04-execution-snapshot-store.md`、
 `docs/rfcs/2026-07-31-temporal-runtime-adapter.md` 与
 `docs/superpowers/specs/2026-07-31-temporal-runtime-adapter-design.md`。
 
@@ -371,6 +371,52 @@ async with create_runtime(load_settings()) as runtime:
 ```
 
 `relay_outbox_handler()` 在 memory 禁用时抛出 code 为 `memory_disabled` 的 `ConfigurationError`（先于中继相关错误检查），在 `outbox_relay.enabled` 为 `False` 时抛出 `outbox_relay_disabled`，在运行时未启动时抛出 `RuntimeError`。默认 `LoggingOutboxEventPublisher` 在进程内记录已分发事件供测试使用；生产消息中间件实现同一 Port，无需修改 Handler。
+
+## 运行时 Outbox Relay
+
+`RelayRuntimeOutboxEventsHandler` 轮询 `runtime_outbox_events` 中未发布的行，通过 `RuntimeOutboxEventPublisher` 分发，并仅在批次内所有 `publish` 调用成功后设置 `published_at`。`AppRuntime` 通过 `relay_runtime_outbox_handler()`、`relay_runtime_outbox_once()` 与 `run_runtime_outbox_relay_loop()` 装配该中继。
+
+**命名：** `RuntimeOutboxPort.publish`（运行时状态提交事务内的写入）与 `RuntimeOutboxEventPublisher.publish`（store 事务外的中继分发）是不同职责，文档与代码评审必须明确区分。
+
+v1 假定**每个数据库仅有一个活跃中继 Worker**（无 `SKIP LOCKED`）。行按全局顺序 `occurred_at ASC, event_id ASC` 获取。投递为**至少一次**：若在成功 `publish` 之后、`mark_published` 之前进程崩溃，重试可能再次分发同一事件；下游消费者须按 `event_id` 去重。任一 `publish` 失败时，Handler 立即重新抛出，不调用 `mark_published`；调用方不会收到 `RelayRuntimeOutboxResult`。失败前已成功 dispatch 的事件可能已投递，但 `published_at` 仍为 NULL。
+
+```python
+async with create_runtime(load_settings()) as runtime:
+    await runtime.start_execution_handler().handle(command)
+    result = await runtime.relay_runtime_outbox_once()
+    print(result.published, runtime.logging_runtime_outbox_event_publisher.published)
+```
+
+`relay_runtime_outbox_handler()` 在 runtime 禁用时抛出 code 为 `runtime_disabled` 的 `ConfigurationError`（先于中继相关错误检查），在 `runtime_outbox_relay.enabled` 为 `False` 时抛出 `runtime_outbox_relay_disabled`，在运行时数据库非 PostgreSQL 时抛出 `runtime_outbox_relay_storage_unconfigured`，在运行时未启动时抛出 `RuntimeError`。默认 `LoggingRuntimeOutboxEventPublisher` 在进程内记录已分发事件供测试使用；生产消息中间件实现同一 Port，无需修改 Handler。
+
+### 事件发射路径
+
+| 路径 | 已提交的状态转换 | 预期事件数 |
+|------|------------------|-----------|
+| InMemory `start`（新建） | `null → pending` | 1 |
+| InMemory `start`（幂等重放） | 无 | 0 |
+| InMemory `cancel` | 合法 cancel 链 | 1–2 |
+| Temporal 生命周期 | `planning → running → succeeded` | 3 |
+| Temporal cancel | 合法 cancel 链 | 1–2 |
+
+InMemory 模式不会自动推进到 `pending` 之后；Temporal 是生产环境的完整生命周期事件来源。Temporal Activity 的 outbox 写入发生在工作流事务之外；Activity 重试可能为同一 `(execution_id, revision)` 插入带新 `event_id` 的行——消费者应按 `event_id` 或 `(execution_id, revision)` 去重。
+
+### 配置
+
+```python
+class RuntimeOutboxRelaySettings:
+    enabled: bool = True
+    batch_size: int = 100
+    poll_interval_seconds: float = 1.0
+```
+
+| 环境变量 | 默认值 |
+|---------|--------|
+| `ENGRAMMESH__RUNTIME_OUTBOX_RELAY__ENABLED` | `true` |
+| `ENGRAMMESH__RUNTIME_OUTBOX_RELAY__BATCH_SIZE` | `100` |
+| `ENGRAMMESH__RUNTIME_OUTBOX_RELAY__POLL_INTERVAL_SECONDS` | `1.0` |
+
+HTTP 服务**不会**自动启动运行时中继循环（与 memory Outbox Relay 相同）。运维部署可在同一 Worker 进程中调用 `relay_outbox_once` 与 `relay_runtime_outbox_once`，或为各模块使用独立进程。
 
 ## Inbox 消费者
 

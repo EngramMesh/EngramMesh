@@ -1,11 +1,27 @@
 import copy
 import json
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
+
+from engrammesh.modules.memory.public import MemoryScope
+from engrammesh.modules.runtime.adapters.shared.status_changed_event import (
+    build_execution_status_changed_event,
+)
+from engrammesh.modules.runtime.domain.model import ExecutionSnapshot, ExecutionStatus
+from engrammesh.shared.kernel.events import EventEnvelope
+from engrammesh.shared.kernel.ids import (
+    CorrelationId,
+    EventId,
+    ExecutionId,
+    SubjectId,
+    TenantId,
+)
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
 SCHEMA_ROOT = REPOSITORY_ROOT / "packages" / "contracts" / "jsonschema"
@@ -238,3 +254,63 @@ def test_episode_schema_rejects_blank_non_nullable_text(
 
     with pytest.raises(ValidationError):
         _validator("episode").validate(event)
+
+
+BUILDER_EXECUTION_ID = ExecutionId(UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
+BUILDER_TENANT_ID = TenantId(UUID("11111111-2222-3333-4444-555555555555"))
+BUILDER_UPDATED_AT = datetime(2026, 9, 7, 9, 0, tzinfo=UTC)
+
+
+def _event_envelope_to_contract_dict(event: EventEnvelope) -> dict[str, object]:
+    return {
+        "event_id": str(event.event_id.value),
+        "event_type": event.event_type,
+        "schema_version": event.schema_version,
+        "tenant_id": str(event.tenant_id.value),
+        "aggregate_id": str(event.aggregate_id.value),
+        "aggregate_version": event.aggregate_version,
+        "correlation_id": str(event.correlation_id.value),
+        "causation_id": (
+            None if event.causation_id is None else str(event.causation_id.value)
+        ),
+        "occurred_at": event.occurred_at.isoformat(),
+        "payload": dict(event.payload),
+    }
+
+
+def _builder_snapshot(*, status: ExecutionStatus, revision: int) -> ExecutionSnapshot:
+    return ExecutionSnapshot(
+        execution_id=BUILDER_EXECUTION_ID,
+        scope=MemoryScope(BUILDER_TENANT_ID, SubjectId(UUID(int=1))),
+        revision=revision,
+        status=status,
+        plan_revision=None,
+        node_statuses={},
+        suspension=None,
+        result_ref=None,
+        failure=None,
+        updated_at=BUILDER_UPDATED_AT,
+    )
+
+
+@pytest.mark.parametrize(
+    ("previous_status", "status", "revision"),
+    [
+        (None, ExecutionStatus.PENDING, 1),
+        (ExecutionStatus.RUNNING, ExecutionStatus.SUCCEEDED, 7),
+    ],
+)
+def test_build_execution_status_changed_event_matches_execution_schema(
+    previous_status: ExecutionStatus | None,
+    status: ExecutionStatus,
+    revision: int,
+) -> None:
+    event = build_execution_status_changed_event(
+        event_id=EventId(UUID(int=9)),
+        correlation_id=CorrelationId(BUILDER_EXECUTION_ID.value),
+        causation_id=None,
+        previous_status=previous_status,
+        snapshot=_builder_snapshot(status=status, revision=revision),
+    )
+
+    _validator("execution").validate(_event_envelope_to_contract_dict(event))
