@@ -24,6 +24,7 @@ pytestmark = pytest.mark.postgres
 _RUNTIME_TABLES = (
     "runtime_execution_snapshots",
     "runtime_start_idempotency",
+    "runtime_outbox_events",
 )
 
 

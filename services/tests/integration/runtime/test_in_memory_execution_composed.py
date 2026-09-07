@@ -10,12 +10,14 @@ import pytest
 from engrammesh.bootstrap.infrastructure import (
     EnvironmentGatedRuntimeAuthorization,
     SystemUtcClock,
-    UuidRuntimeIdentityPort,
 )
 from engrammesh.bootstrap.settings import Environment
 from engrammesh.modules.memory.public import MemoryScope
 from engrammesh.modules.runtime.adapters.in_memory.database import (
     InMemoryRuntimeDatabase,
+)
+from engrammesh.modules.runtime.adapters.in_memory.identities import (
+    UuidRuntimeIdentityPort,
 )
 from engrammesh.modules.runtime.adapters.in_memory.orchestrator import (
     InMemoryOrchestratorPort,

@@ -56,11 +56,13 @@ from engrammesh.modules.runtime.ports import (
     ToolRegistryPort,
 )
 from engrammesh.modules.runtime.public import __all__ as public_exports
+from engrammesh.shared.kernel.events import EventEnvelope
 from engrammesh.shared.kernel.ids import (
     AgentDefinitionId,
     ArtifactId,
     AttemptId,
     EffectId,
+    EventId,
     ExecutionId,
     NodeId,
     SubjectId,
@@ -241,6 +243,7 @@ DATACLASS_SHAPES = {
 
 EMPTY = inspect.Signature.empty
 PARAMETER = inspect.Parameter.POSITIONAL_OR_KEYWORD
+KEYWORD_ONLY = inspect.Parameter.KEYWORD_ONLY
 PROTOCOL_SIGNATURES = {
     OrchestratorPort.start: (
         (("self", EMPTY, EMPTY), ("spec", ExecutionSpec, EMPTY)),
@@ -337,6 +340,30 @@ PROTOCOL_SIGNATURES = {
     RemoteAgentPort.invoke: (
         (("self", EMPTY, EMPTY), ("invocation", AgentInvocation, EMPTY)),
         AgentOutcome,
+    ),
+    RuntimeOutboxPort.publish: (
+        (("self", EMPTY, EMPTY), ("event", EventEnvelope, EMPTY)),
+        None,
+    ),
+    RuntimeOutboxRelayStore.fetch_unpublished: (
+        (("self", EMPTY, EMPTY), ("limit", int, EMPTY)),
+        tuple[EventEnvelope, ...],
+    ),
+    RuntimeOutboxRelayStore.mark_published: (
+        (
+            ("self", EMPTY, EMPTY),
+            ("event_ids", tuple[EventId, ...], EMPTY),
+            ("published_at", datetime, EMPTY),
+        ),
+        None,
+    ),
+    RuntimeOutboxRelayStore.count_unpublished: (
+        (("self", EMPTY, EMPTY),),
+        int,
+    ),
+    RuntimeOutboxEventPublisher.publish: (
+        (("self", EMPTY, EMPTY), ("event", EventEnvelope, EMPTY)),
+        None,
     ),
 }
 
@@ -438,7 +465,19 @@ def test_port_methods_have_exact_framework_neutral_signatures() -> None:
             )
             for parameter in signature.parameters.values()
         ) == tuple(
-            (name, annotation, default, PARAMETER)
+            (
+                name,
+                annotation,
+                default,
+                KEYWORD_ONLY
+                if name != "self"
+                and method
+                in (
+                    RuntimeOutboxRelayStore.fetch_unpublished,
+                    RuntimeOutboxRelayStore.mark_published,
+                )
+                else PARAMETER,
+            )
             for name, annotation, default in expected_parameters
         )
         assert signature.return_annotation == expected_return

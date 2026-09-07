@@ -11,8 +11,8 @@ from engrammesh.modules.runtime.adapters.postgres.connection import (
     PostgresRuntimeConnection,
 )
 from engrammesh.modules.runtime.adapters.postgres.mappers import (
-    _to_json_value,
     event_to_row,
+    to_json_value,
 )
 from engrammesh.modules.runtime.adapters.shared.status_changed_event import (
     build_execution_status_changed_event,
@@ -84,6 +84,6 @@ class PostgresRuntimeOutboxWriter:
                     row["correlation_id"],
                     row["causation_id"],
                     row["occurred_at"],
-                    Jsonb(_to_json_value(row["payload"])),
+                    Jsonb(to_json_value(row["payload"])),
                 ),
             )

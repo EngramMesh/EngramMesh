@@ -13,7 +13,6 @@ from engrammesh.bootstrap.infrastructure import (
     LoggingRuntimeOutboxEventPublisher,
     SystemUtcClock,
     UuidMemoryIdentityPort,
-    UuidRuntimeIdentityPort,
     create_memory_authorization,
     create_runtime_authorization,
     create_token_verifier,
@@ -45,6 +44,9 @@ from engrammesh.modules.memory.application.relay_outbox import RelayOutboxEvents
 from engrammesh.modules.memory.ports import OutboxEventPublisher
 from engrammesh.modules.runtime.adapters.in_memory.database import (
     InMemoryRuntimeDatabase,
+)
+from engrammesh.modules.runtime.adapters.in_memory.identities import (
+    UuidRuntimeIdentityPort,
 )
 from engrammesh.modules.runtime.adapters.in_memory.orchestrator import (
     InMemoryOrchestratorPort,

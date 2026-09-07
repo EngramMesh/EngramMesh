@@ -18,12 +18,12 @@ from engrammesh.modules.runtime.adapters.postgres.connection import (
 )
 from engrammesh.modules.runtime.adapters.postgres.mappers import (
     _as_uuid,
-    _to_json_value,
     event_to_row,
     idempotency_to_row,
     row_to_fingerprint,
     row_to_snapshot,
     snapshot_to_row,
+    to_json_value,
 )
 from engrammesh.modules.runtime.adapters.shared.snapshot_codec import (
     fingerprint_to_json,
@@ -238,7 +238,7 @@ async def _persist_outbox(
                     row["correlation_id"],
                     row["causation_id"],
                     row["occurred_at"],
-                    Jsonb(_to_json_value(row["payload"])),
+                    Jsonb(to_json_value(row["payload"])),
                 ),
             )
 
@@ -286,7 +286,7 @@ async def _persist_idempotency(
                         row["tenant_id"],
                         row["idempotency_key"],
                         row["execution_id"],
-                        Jsonb(_to_json_value(row["fingerprint"])),
+                        Jsonb(to_json_value(row["fingerprint"])),
                         row["created_at"],
                     ),
                 )
@@ -314,7 +314,7 @@ async def _persist_idempotency(
                 (
                     after_execution_id.value,
                     Jsonb(
-                        _to_json_value(fingerprint_to_json(after_fingerprint))
+                        to_json_value(fingerprint_to_json(after_fingerprint))
                     ),
                     tenant_id.value,
                     idempotency_key,
@@ -356,7 +356,7 @@ async def _persist_snapshots(
                     row["agent_id"],
                     row["revision"],
                     row["status"],
-                    Jsonb(_to_json_value(row["snapshot"])),
+                    Jsonb(to_json_value(row["snapshot"])),
                     row["updated_at"],
                 ),
             )
@@ -385,7 +385,7 @@ async def _persist_snapshots(
                     row["agent_id"],
                     row["revision"],
                     row["status"],
-                    Jsonb(_to_json_value(row["snapshot"])),
+                    Jsonb(to_json_value(row["snapshot"])),
                     row["updated_at"],
                     row["tenant_id"],
                     row["execution_id"],

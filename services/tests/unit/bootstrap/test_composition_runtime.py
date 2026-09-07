@@ -13,6 +13,9 @@ from engrammesh.bootstrap.settings import (
 from engrammesh.modules.memory.adapters.postgres.connection import (
     PostgresMemoryDatabase as PostgresMemoryDatabaseType,
 )
+from engrammesh.modules.runtime.adapters.in_memory.database import (
+    InMemoryRuntimeDatabase,
+)
 from engrammesh.modules.runtime.adapters.in_memory.orchestrator import (
     InMemoryOrchestratorPort,
 )
@@ -101,6 +104,23 @@ async def test_relay_runtime_outbox_handler_when_relay_disabled_raises() -> None
         with pytest.raises(ConfigurationError) as exc_info:
             runtime.relay_runtime_outbox_handler()
         assert exc_info.value.code == "runtime_outbox_relay_disabled"
+        await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_relay_runtime_outbox_handler_when_storage_not_postgres_raises() -> None:
+    runtime = create_runtime(_test_settings())
+    with (
+        patch("engrammesh.bootstrap.composition.PostgresMemoryDatabase") as memory_cls,
+        patch("engrammesh.bootstrap.composition.PostgresRuntimeDatabase") as runtime_cls,
+    ):
+        memory_cls.return_value = _mock_postgres_memory_database()
+        runtime_cls.return_value = _mock_postgres_runtime_database()
+        await runtime.startup()
+        runtime._runtime_database = InMemoryRuntimeDatabase()
+        with pytest.raises(ConfigurationError) as exc_info:
+            runtime.relay_runtime_outbox_handler()
+        assert exc_info.value.code == "runtime_outbox_relay_storage_unconfigured"
         await runtime.shutdown()
 
 
