@@ -56,6 +56,7 @@ def _wire_handlers() -> tuple[
     StartExecutionHandler,
     GetExecutionSnapshotHandler,
     CancelExecutionHandler,
+    InMemoryOrchestratorPort,
 ]:
     authorization = EnvironmentGatedRuntimeAuthorization(Environment.TEST)
     orchestrator = InMemoryOrchestratorPort(
@@ -76,12 +77,13 @@ def _wire_handlers() -> tuple[
             authorization=authorization,
             orchestrator=orchestrator,
         ),
+        orchestrator,
     )
 
 
 @pytest.mark.asyncio
 async def test_composed_start_get_cancel_with_real_handlers() -> None:
-    start_handler, get_handler, cancel_handler = _wire_handlers()
+    start_handler, get_handler, cancel_handler, orchestrator = _wire_handlers()
 
     start_result = await start_handler.handle(
         StartExecutionCommand(
@@ -120,3 +122,9 @@ async def test_composed_start_get_cancel_with_real_handlers() -> None:
     )
     assert cancel_result.snapshot.execution_id == execution_id
     assert cancel_result.snapshot.status == ExecutionStatus.CANCELLED
+
+    events = await orchestrator.database.read(lambda state: state.outbox_events)
+    assert len(events) == 3
+    assert events[0].payload["status"] == "pending"
+    assert events[1].payload["status"] == "cancelling"
+    assert events[2].payload["status"] == "cancelled"

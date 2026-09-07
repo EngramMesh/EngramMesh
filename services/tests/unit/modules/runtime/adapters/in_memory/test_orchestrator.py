@@ -236,3 +236,47 @@ async def test_cancel_raises_invalid_transition_from_terminal_success(
 
     with pytest.raises(InvalidExecutionTransition):
         await orchestrator.cancel(created.scope, created.execution_id, "cancel-2")
+
+
+@pytest.mark.asyncio
+async def test_start_emits_pending_status_changed_event() -> None:
+    database = InMemoryRuntimeDatabase()
+    orchestrator = InMemoryOrchestratorPort(SystemUtcClock(), database)
+    spec = _spec()
+    await orchestrator.start(spec)
+    events = await database.read(lambda state: state.outbox_events)
+    assert len(events) == 1
+    assert events[0].event_type == "runtime.execution-status-changed"
+    assert events[0].payload["status"] == "pending"
+    assert events[0].payload["previous_status"] is None
+
+
+@pytest.mark.asyncio
+async def test_idempotent_start_emits_no_events() -> None:
+    database = InMemoryRuntimeDatabase()
+    orchestrator = InMemoryOrchestratorPort(SystemUtcClock(), database)
+    spec = _spec(key="idem-outbox")
+    await orchestrator.start(spec)
+    events_after_first = await database.read(lambda state: state.outbox_events)
+    await orchestrator.start(_spec(execution_id=ExecutionId.new(), key="idem-outbox"))
+    events_after_replay = await database.read(lambda state: state.outbox_events)
+    assert events_after_replay == events_after_first
+
+
+@pytest.mark.asyncio
+async def test_cancel_from_running_emits_cancelling_and_cancelled_events() -> None:
+    database = InMemoryRuntimeDatabase()
+    orchestrator = InMemoryOrchestratorPort(SystemUtcClock(), database)
+    created = await orchestrator.start(_spec())
+    running = replace(created, status=ExecutionStatus.RUNNING, revision=created.revision + 1)
+    database.replace_snapshot_for_tests(running)
+
+    await orchestrator.cancel(running.scope, running.execution_id, "cancel-outbox")
+
+    events = await database.read(lambda state: state.outbox_events)
+    cancel_events = events[1:]
+    assert len(cancel_events) == 2
+    assert cancel_events[0].payload["previous_status"] == "running"
+    assert cancel_events[0].payload["status"] == "cancelling"
+    assert cancel_events[1].payload["previous_status"] == "cancelling"
+    assert cancel_events[1].payload["status"] == "cancelled"

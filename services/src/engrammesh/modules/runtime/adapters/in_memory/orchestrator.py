@@ -8,6 +8,9 @@ from types import MappingProxyType
 from typing import final
 
 from engrammesh.modules.memory.public import MemoryScope
+from engrammesh.modules.runtime.adapters.shared.status_changed_event import (
+    build_execution_status_changed_event,
+)
 from engrammesh.modules.runtime.domain.errors import (
     ExecutionIdempotencyConflict,
     ExecutionNotFound,
@@ -22,10 +25,11 @@ from engrammesh.modules.runtime.domain.state import can_transition_execution
 from engrammesh.modules.runtime.ports import (
     ClockPort,
     RuntimeDatabasePort,
+    RuntimeIdentityPort,
     RuntimeOutboxPort,
 )
 from engrammesh.modules.runtime.runtime_state import CommittedRuntimeState
-from engrammesh.shared.kernel.ids import ExecutionId, TenantId
+from engrammesh.shared.kernel.ids import CorrelationId, EventId, ExecutionId, TenantId
 
 
 def _spec_fingerprint(spec: ExecutionSpec) -> tuple[object, ...]:
@@ -85,16 +89,16 @@ def _commit_snapshot(
     )
 
 
-def _cancel_snapshot(
+def _cancel_transitions(
     snapshot: ExecutionSnapshot,
     *,
     updated_at: datetime,
-) -> ExecutionSnapshot:
+) -> tuple[tuple[ExecutionStatus, ExecutionSnapshot], ...]:
     if snapshot.status in {
         ExecutionStatus.CANCELLED,
         ExecutionStatus.FAILED,
     }:
-        return snapshot
+        return ()
     if snapshot.status is ExecutionStatus.SUCCEEDED:
         raise InvalidExecutionTransition()
 
@@ -105,12 +109,13 @@ def _cancel_snapshot(
             ExecutionStatus.CANCELLED,
         ):
             raise InvalidExecutionTransition()
-        return replace(
+        cancelled = replace(
             current,
             status=ExecutionStatus.CANCELLED,
             revision=current.revision + 1,
             updated_at=updated_at,
         )
+        return ((ExecutionStatus.CANCELLING, cancelled),)
 
     if not can_transition_execution(current.status, ExecutionStatus.CANCELLING):
         raise InvalidExecutionTransition()
@@ -125,11 +130,15 @@ def _cancel_snapshot(
         ExecutionStatus.CANCELLED,
     ):
         raise InvalidExecutionTransition()
-    return replace(
+    cancelled = replace(
         cancelling,
         status=ExecutionStatus.CANCELLED,
         revision=cancelling.revision + 1,
         updated_at=updated_at,
+    )
+    return (
+        (current.status, cancelling),
+        (ExecutionStatus.CANCELLING, cancelled),
     )
 
 
@@ -137,19 +146,44 @@ def _cancel_snapshot(
 class InMemoryOrchestratorPort:
     """OrchestratorPort backed by an in-process execution index."""
 
-    __slots__ = ("_clock", "_database")
+    __slots__ = ("_clock", "_database", "_identities")
 
     def __init__(
         self,
         clock: ClockPort,
         database: RuntimeDatabasePort,
+        identities: RuntimeIdentityPort | None = None,
     ) -> None:
         self._clock = clock
         self._database = database
+        if identities is None:
+            from engrammesh.bootstrap.infrastructure import UuidRuntimeIdentityPort
+
+            identities = UuidRuntimeIdentityPort()
+        self._identities = identities
 
     @property
     def database(self) -> RuntimeDatabasePort:
         return self._database
+
+    async def _emit_transition(
+        self,
+        *,
+        outbox: RuntimeOutboxPort,
+        correlation_id: CorrelationId,
+        causation_id: EventId | None,
+        previous_status: ExecutionStatus | None,
+        snapshot: ExecutionSnapshot,
+    ) -> None:
+        await outbox.publish(
+            build_execution_status_changed_event(
+                event_id=await self._identities.new_event_id(),
+                correlation_id=correlation_id,
+                causation_id=causation_id,
+                previous_status=previous_status,
+                snapshot=snapshot,
+            )
+        )
 
     async def start(self, spec: ExecutionSpec) -> ExecutionSnapshot:
         fingerprint = _spec_fingerprint(spec)
@@ -160,7 +194,6 @@ class InMemoryOrchestratorPort:
             state: CommittedRuntimeState,
             outbox: RuntimeOutboxPort,
         ) -> CommittedRuntimeState:
-            del outbox
             existing_id = state.idempotency_index.get(index_key)
             if existing_id is not None:
                 stored_fingerprint = state.fingerprints.get(existing_id)
@@ -179,6 +212,13 @@ class InMemoryOrchestratorPort:
                 result_ref=None,
                 failure=None,
                 updated_at=updated_at,
+            )
+            await self._emit_transition(
+                outbox=outbox,
+                correlation_id=CorrelationId(spec.id.value),
+                causation_id=None,
+                previous_status=None,
+                snapshot=snapshot,
             )
             snapshots = dict(state.snapshots)
             snapshots[snapshot.execution_id] = snapshot
@@ -223,12 +263,23 @@ class InMemoryOrchestratorPort:
             state: CommittedRuntimeState,
             outbox: RuntimeOutboxPort,
         ) -> CommittedRuntimeState:
-            del outbox
             snapshot = _snapshot_for_scope(state, scope, execution_id)
-            cancelled = _cancel_snapshot(snapshot, updated_at=updated_at)
-            if cancelled is snapshot:
+            transitions = _cancel_transitions(snapshot, updated_at=updated_at)
+            if not transitions:
                 return state
-            return _commit_snapshot(state, cancelled)
+
+            correlation_id = CorrelationId(execution_id.value)
+            committed = state
+            for previous_status, next_snapshot in transitions:
+                await self._emit_transition(
+                    outbox=outbox,
+                    correlation_id=correlation_id,
+                    causation_id=None,
+                    previous_status=previous_status,
+                    snapshot=next_snapshot,
+                )
+                committed = _commit_snapshot(committed, next_snapshot)
+            return committed
 
         await self._database.write(_cancel)
         return await self._database.read(
