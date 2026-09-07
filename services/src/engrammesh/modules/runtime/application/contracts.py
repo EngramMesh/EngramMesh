@@ -65,3 +65,16 @@ class CancelExecutionCommand:
 @dataclass(frozen=True, slots=True)
 class CancelExecutionResult:
     snapshot: ExecutionSnapshot
+
+
+@dataclass(frozen=True, slots=True)
+class RelayRuntimeOutboxCommand:
+    batch_size: int
+
+
+@dataclass(frozen=True, slots=True)
+class RelayRuntimeOutboxResult:
+    fetched: int
+    dispatched: int
+    published: int
+    remaining_unpublished: int

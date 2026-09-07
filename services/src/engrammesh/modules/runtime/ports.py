@@ -19,7 +19,8 @@ from engrammesh.modules.runtime.domain.model import (
     ToolResult,
 )
 from engrammesh.modules.runtime.runtime_state import CommittedRuntimeState
-from engrammesh.shared.kernel.ids import ArtifactId, ExecutionId, SubjectId
+from engrammesh.shared.kernel.events import EventEnvelope
+from engrammesh.shared.kernel.ids import ArtifactId, EventId, ExecutionId, SubjectId
 
 RuntimeAction = Literal["start_execution", "get_execution", "cancel_execution"]
 
@@ -153,6 +154,32 @@ class RuntimeAuthorizationPort(Protocol):
 @runtime_checkable
 class RuntimeIdentityPort(Protocol):
     async def new_execution_id(self) -> ExecutionId: ...
+
+    async def new_event_id(self) -> EventId: ...
+
+
+@runtime_checkable
+class RuntimeOutboxPort(Protocol):
+    async def publish(self, event: EventEnvelope) -> None: ...
+
+
+@runtime_checkable
+class RuntimeOutboxRelayStore(Protocol):
+    async def fetch_unpublished(self, *, limit: int) -> tuple[EventEnvelope, ...]: ...
+
+    async def mark_published(
+        self,
+        *,
+        event_ids: tuple[EventId, ...],
+        published_at: datetime,
+    ) -> None: ...
+
+    async def count_unpublished(self) -> int: ...
+
+
+@runtime_checkable
+class RuntimeOutboxEventPublisher(Protocol):
+    async def publish(self, event: EventEnvelope) -> None: ...
 
 
 @runtime_checkable

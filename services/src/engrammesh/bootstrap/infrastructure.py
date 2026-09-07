@@ -142,6 +142,9 @@ class UuidRuntimeIdentityPort:
     async def new_execution_id(self) -> ExecutionId:
         return ExecutionId(uuid4())
 
+    async def new_event_id(self) -> EventId:
+        return EventId(uuid4())
+
 
 def create_runtime_authorization(settings: AppSettings) -> RuntimeAuthorizationPort:
     if settings.oidc.enabled:
