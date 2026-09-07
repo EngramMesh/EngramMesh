@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, get_protocol_members, get_type_hints
 
+import pytest
+
 from engrammesh.modules.memory.public import (
     EvidencePacket,
     MemoryQuery,
@@ -41,6 +43,7 @@ from engrammesh.modules.runtime.ports import (
     AgentEnginePort,
     ArtifactStorePort,
     ClockPort,
+    ExecutionSnapshotStore,
     ModelProviderPort,
     OrchestratorPort,
     PlannerPort,
@@ -52,6 +55,7 @@ from engrammesh.modules.runtime.ports import (
     RuntimeOutboxEventPublisher,
     RuntimeOutboxPort,
     RuntimeOutboxRelayStore,
+    RuntimeSnapshotWriterPort,
     ToolExecutorPort,
     ToolRegistryPort,
 )
@@ -83,6 +87,9 @@ PROTOCOLS = (
     RuntimeOutboxPort,
     RuntimeOutboxRelayStore,
     RuntimeOutboxEventPublisher,
+    RuntimeSnapshotWriterPort,
+    ExecutionSnapshotStore,
+    RuntimeDatabasePort,
     ClockPort,
 )
 
@@ -101,6 +108,8 @@ EXPECTED_METHODS = {
     RuntimeOutboxPort: ("publish",),
     RuntimeOutboxRelayStore: ("fetch_unpublished", "mark_published", "count_unpublished"),
     RuntimeOutboxEventPublisher: ("publish",),
+    RuntimeSnapshotWriterPort: ("upsert_snapshot",),
+    ExecutionSnapshotStore: ("stream",),
     ClockPort: ("now",),
 }
 
@@ -543,3 +552,10 @@ def test_public_surface_exports_only_supported_domain_contracts() -> None:
 def test_runtime_database_port_exposes_read_and_write() -> None:
     assert hasattr(RuntimeDatabasePort, "read")
     assert hasattr(RuntimeDatabasePort, "write")
+
+
+@pytest.mark.parametrize("protocol", (RuntimeSnapshotWriterPort, ExecutionSnapshotStore))
+def test_new_runtime_list_protocols_expose_expected_methods(protocol: type) -> None:
+    assert EXPECTED_METHODS[protocol] == tuple(
+        name for name in get_protocol_members(protocol) if name != "__init__"
+    )
