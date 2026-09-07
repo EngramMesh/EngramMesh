@@ -62,6 +62,23 @@ class LoggingOutboxEventPublisher:
 
 
 @final
+class LoggingRuntimeOutboxEventPublisher:
+    """In-process publisher that records dispatched runtime events for tests."""
+
+    __slots__ = ("_published",)
+
+    def __init__(self) -> None:
+        self._published: list[EventEnvelope] = []
+
+    @property
+    def published(self) -> tuple[EventEnvelope, ...]:
+        return tuple(self._published)
+
+    async def publish(self, event: EventEnvelope) -> None:
+        self._published.append(event)
+
+
+@final
 class InboxOutboxEventPublisher:
     """Dispatch outbox events through inbox processing then a delegate."""
 

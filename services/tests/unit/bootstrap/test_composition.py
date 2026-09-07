@@ -219,6 +219,18 @@ def test_relay_outbox_handler_when_memory_disabled_raises() -> None:
     assert exc_info.value.code == "memory_disabled"
 
 
+def test_relay_runtime_outbox_handler_when_runtime_disabled_raises() -> None:
+    runtime = create_runtime(
+        _test_settings(
+            modules=ModuleSettings(runtime_enabled=False),
+            runtime_outbox_relay={"enabled": False},
+        )
+    )
+    with pytest.raises(ConfigurationError) as exc_info:
+        runtime.relay_runtime_outbox_handler()
+    assert exc_info.value.code == "runtime_disabled"
+
+
 @pytest.mark.asyncio
 async def test_relay_outbox_handler_when_outbox_relay_disabled_raises() -> None:
     runtime = create_runtime(_test_settings(outbox_relay={"enabled": False}))
