@@ -455,13 +455,13 @@ completion, idempotent start replay, cancel, and worker-restart recovery.
 
 This slice deliberately excludes:
 
-- Runtime Outbox events and execution lifecycle event publication (follow-up ④c)
 - Execution list HTTP API (follow-up ④d)
 - Temporal → PostgreSQL snapshot projection (follow-up ④e)
 - LangGraph, PlannerPort, AgentEnginePort, full Plan DAG execution
 - Claim extraction (Phase 2)
 
-See `docs/rfcs/2026-08-04-execution-snapshot-store.md`,
+See `docs/rfcs/2026-09-07-runtime-outbox.md`,
+`docs/rfcs/2026-08-04-execution-snapshot-store.md`,
 `docs/rfcs/2026-07-31-temporal-runtime-adapter.md`, and
 `docs/superpowers/specs/2026-07-31-temporal-runtime-adapter-design.md`.
 
@@ -502,6 +502,82 @@ when memory is disabled (checked before relay-specific errors), then
 `RuntimeError` when the runtime is not started. The default
 `LoggingOutboxEventPublisher` records dispatched events in-process for tests;
 production brokers implement the same port without changing the handler.
+
+## Runtime Outbox Relay
+
+`RelayRuntimeOutboxEventsHandler` polls unpublished rows from
+`runtime_outbox_events`, dispatches them through `RuntimeOutboxEventPublisher`,
+and sets `published_at` only after every `publish` call in the batch succeeds.
+`AppRuntime` wires the relay through `relay_runtime_outbox_handler()`,
+`relay_runtime_outbox_once()`, and `run_runtime_outbox_relay_loop()`.
+
+**Naming:** `RuntimeOutboxPort.publish` (transactional write inside a runtime
+state commit) and `RuntimeOutboxEventPublisher.publish` (relay dispatch outside
+the store transaction) are distinct responsibilities. Documentation and code
+reviews must keep this distinction explicit.
+
+v1 assumes **one active relay worker per database** (no `SKIP LOCKED`). Rows
+are fetched in global order `occurred_at ASC, event_id ASC`. Delivery is
+**at-least-once**: if the process crashes after successful `publish` calls but
+before `mark_published`, a retry may dispatch the same event again; downstream
+consumers must dedupe by `event_id`. When any `publish` fails, the handler
+re-raises immediately and does not call `mark_published`; callers do not receive
+a `RelayRuntimeOutboxResult` on failure. Events successfully dispatched before
+the failure may have been delivered but remain unmarked (`published_at` still
+NULL).
+
+```python
+async with create_runtime(load_settings()) as runtime:
+    await runtime.start_execution_handler().handle(command)
+    result = await runtime.relay_runtime_outbox_once()
+    print(result.published, runtime.logging_runtime_outbox_event_publisher.published)
+```
+
+`relay_runtime_outbox_handler()` raises `ConfigurationError` with code
+`runtime_disabled` when runtime is disabled (checked before relay-specific
+errors), then `runtime_outbox_relay_disabled` when
+`runtime_outbox_relay.enabled` is `False`, then
+`runtime_outbox_relay_storage_unconfigured` when the runtime database is not
+PostgreSQL-backed, and `RuntimeError` when the runtime is not started. The
+default `LoggingRuntimeOutboxEventPublisher` records dispatched events
+in-process for tests; production brokers implement the same port without
+changing the handler.
+
+### Emission paths
+
+| Path | Committed transitions | Expected events |
+|------|----------------------|-----------------|
+| InMemory `start` (new) | `null → pending` | 1 |
+| InMemory `start` (idempotent replay) | none | 0 |
+| InMemory `cancel` | legal cancel chain | 1–2 |
+| Temporal lifecycle | `planning → running → succeeded` | 3 |
+| Temporal cancel | legal cancel chain | 1–2 |
+
+InMemory mode does not auto-advance beyond `pending`; Temporal is the full
+lifecycle event source in production. Temporal activity outbox writes occur
+outside the workflow transaction; activity retry may insert a new row with a
+new `event_id` for the same `(execution_id, revision)` — consumers should
+dedupe by `event_id` or `(execution_id, revision)`.
+
+### Configuration
+
+```python
+class RuntimeOutboxRelaySettings:
+    enabled: bool = True
+    batch_size: int = 100
+    poll_interval_seconds: float = 1.0
+```
+
+| Environment variable | Default |
+|---------------------|---------|
+| `ENGRAMMESH__RUNTIME_OUTBOX_RELAY__ENABLED` | `true` |
+| `ENGRAMMESH__RUNTIME_OUTBOX_RELAY__BATCH_SIZE` | `100` |
+| `ENGRAMMESH__RUNTIME_OUTBOX_RELAY__POLL_INTERVAL_SECONDS` | `1.0` |
+
+The HTTP server does **not** start the runtime relay loop automatically (same as
+memory Outbox Relay). Operational deployments may call both `relay_outbox_once`
+and `relay_runtime_outbox_once` from one worker process or separate processes
+per module.
 
 ## Inbox Consumer
 

@@ -74,6 +74,14 @@ Semantic Versioning after its first public release.
   JSON Schema contracts (`packages/contracts/jsonschema/runtime/v1/`), structured
   error envelopes, unit/integration/OIDC tests, and bilingual services
   documentation (endpoints, errors, `curl` example).
+- Runtime Outbox and execution lifecycle events: `runtime.execution-status-changed`
+  JSON Schema contract, `RuntimeOutboxPort` / `RuntimeOutboxRelayStore` /
+  `RelayRuntimeOutboxEventsHandler`, `runtime_outbox_events` SQL migrations,
+  InMemory and Temporal emission paths, `PostgresRuntimeOutboxWriter` for activity
+  outbox writes, `AppRuntime.relay_runtime_outbox_once` /
+  `run_runtime_outbox_relay_loop`, contract/postgres/temporal integration coverage,
+  architecture import-boundary tests, RFC summary, and bilingual services
+  documentation (naming, at-least-once semantics, settings).
 
 ### Changed
 

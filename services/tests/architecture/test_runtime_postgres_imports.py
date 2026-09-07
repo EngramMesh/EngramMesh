@@ -6,7 +6,7 @@ from pathlib import Path
 SERVICES_ROOT = Path(__file__).parents[2]
 SOURCE_ROOT = SERVICES_ROOT / "src"
 ENGRAMMESH_ROOT = SOURCE_ROOT / "engrammesh"
-RUNTIME_POSTGRES_PREFIX = "engrammesh.modules.runtime.adapters.postgres"
+POSTGRES_ADAPTER_PREFIX = "engrammesh.modules.runtime.adapters.postgres"
 ALLOWED_PREFIXES = (
     "engrammesh/bootstrap/",
     "engrammesh/modules/runtime/adapters/postgres/",
@@ -34,23 +34,21 @@ def _import_targets(source: Path, source_root: Path) -> Iterable[str]:
                 yield node.module
 
 
-def _runtime_postgres_import_violations() -> list[str]:
+def _postgres_import_violations() -> list[str]:
     violations: list[str] = []
     for source in sorted(ENGRAMMESH_ROOT.rglob("*.py")):
         relative = source.relative_to(SOURCE_ROOT).as_posix()
         if any(relative.startswith(prefix) for prefix in ALLOWED_PREFIXES):
             continue
         for target in _import_targets(source, SOURCE_ROOT):
-            if target == RUNTIME_POSTGRES_PREFIX or target.startswith(
-                f"{RUNTIME_POSTGRES_PREFIX}."
+            if target == POSTGRES_ADAPTER_PREFIX or target.startswith(
+                f"{POSTGRES_ADAPTER_PREFIX}."
             ):
                 violations.append(
-                    f"{source}: imports runtime postgres adapter outside bootstrap: {target}"
+                    f"{source}: imports postgres adapter outside bootstrap: {target}"
                 )
     return violations
 
 
-def test_only_bootstrap_and_runtime_postgres_adapter_import_runtime_postgres_module() -> (
-    None
-):
-    assert _runtime_postgres_import_violations() == []
+def test_only_bootstrap_and_postgres_adapter_import_postgres_module() -> None:
+    assert _postgres_import_violations() == []

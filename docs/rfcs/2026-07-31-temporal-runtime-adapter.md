@@ -28,7 +28,6 @@ This slice delivers Slice 1 (in-memory `OrchestratorPort` + application handlers
 
 ## 3. Non-goals
 
-- Runtime Outbox events (follow-up ④c)
 - LangGraph, PlannerPort, AgentEnginePort, ArtifactStore
 - Full Plan DAG execution
 - Claim extraction (Phase 2 entry)
@@ -126,5 +125,6 @@ See spec acceptance criteria (8 items), including:
 ④ Temporal runtime adapter                       ✅
    ④a Execution HTTP API                         ✅
    ④b Execution snapshot store (PostgreSQL)      ✅
+   ④c Runtime Outbox + execution lifecycle events   ✅
 ⑤ Claim extraction processor                     ← Phase 2 entry
 ```

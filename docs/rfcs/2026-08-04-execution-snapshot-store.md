@@ -24,7 +24,6 @@ PostgreSQL-backed `RuntimeDatabasePort` as the durable replacement.
 
 ## 3. Non-goals
 
-- Runtime Outbox events (④c)
 - Execution list HTTP API (④d)
 - Temporal → PostgreSQL snapshot projection (④e)
 - Handler, HTTP, or `OrchestratorPort` semantic changes
@@ -63,7 +62,7 @@ See spec §9.
 
 ```text
 ④b Execution snapshot store (PostgreSQL)      ✅
-④c Runtime Outbox + execution lifecycle events
+④c Runtime Outbox + execution lifecycle events   ✅
 ④d Execution list HTTP API
 ④e Temporal snapshot projection to PostgreSQL
 ⑤ Claim extraction processor                  ← Phase 2 entry
