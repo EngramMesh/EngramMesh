@@ -12,6 +12,7 @@ from engrammesh.modules.runtime.domain.model import (
     Budget,
     ExecutionSnapshot,
     ExecutionSpec,
+    ExecutionStatus,
     Plan,
     PlanDelta,
     ToolCall,
@@ -20,7 +21,13 @@ from engrammesh.modules.runtime.domain.model import (
 )
 from engrammesh.modules.runtime.runtime_state import CommittedRuntimeState
 from engrammesh.shared.kernel.events import EventEnvelope
-from engrammesh.shared.kernel.ids import ArtifactId, EventId, ExecutionId, SubjectId
+from engrammesh.shared.kernel.ids import (
+    ArtifactId,
+    CorrelationId,
+    EventId,
+    ExecutionId,
+    SubjectId,
+)
 
 RuntimeAction = Literal["start_execution", "get_execution", "cancel_execution"]
 
@@ -161,6 +168,18 @@ class RuntimeIdentityPort(Protocol):
 @runtime_checkable
 class RuntimeOutboxPort(Protocol):
     async def publish(self, event: EventEnvelope) -> None: ...
+
+
+@runtime_checkable
+class RuntimeOutboxWriterPort(Protocol):
+    """Standalone outbox writer for Temporal activity side effects."""
+
+    async def publish_status_changed(
+        self,
+        previous_status: ExecutionStatus | None,
+        snapshot: ExecutionSnapshot,
+        correlation_id: CorrelationId,
+    ) -> None: ...
 
 
 @runtime_checkable

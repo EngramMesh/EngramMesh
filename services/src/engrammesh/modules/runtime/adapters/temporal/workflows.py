@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import timedelta
 from typing import Any
 
@@ -13,14 +12,11 @@ from engrammesh.modules.runtime.adapters.temporal.activities import (
     advance_to_planning,
     advance_to_running,
     advance_to_succeeded,
+    apply_execution_cancel,
 )
 from engrammesh.modules.runtime.adapters.temporal.mappers import (
     initial_snapshot_payload,
-    payload_to_snapshot,
-    snapshot_to_payload,
 )
-from engrammesh.modules.runtime.domain.model import ExecutionStatus
-from engrammesh.modules.runtime.domain.state import can_transition_execution
 from engrammesh.shared.kernel.ids import ExecutionId, TenantId
 
 
@@ -49,7 +45,7 @@ class ExecutionLifecycleWorkflow:
         )
 
         if self._cancel_requested:
-            self._apply_cancel()
+            await self._apply_cancel()
             return
 
         self._snapshot = await workflow.execute_activity(
@@ -60,7 +56,7 @@ class ExecutionLifecycleWorkflow:
         )
 
         if self._cancel_requested:
-            self._apply_cancel()
+            await self._apply_cancel()
             return
 
         self._snapshot = await workflow.execute_activity(
@@ -71,7 +67,7 @@ class ExecutionLifecycleWorkflow:
         )
 
         if self._cancel_requested:
-            self._apply_cancel()
+            await self._apply_cancel()
             return
 
         self._snapshot = await workflow.execute_activity(
@@ -89,34 +85,10 @@ class ExecutionLifecycleWorkflow:
     def current_snapshot(self) -> dict[str, Any]:
         return self._snapshot
 
-    def _apply_cancel(self) -> None:
-        snapshot = payload_to_snapshot(self._snapshot)
-        if snapshot.status in {
-            ExecutionStatus.SUCCEEDED,
-            ExecutionStatus.FAILED,
-            ExecutionStatus.CANCELLED,
-        }:
-            return
-
-        updated_at = workflow.now()
-        if snapshot.status is not ExecutionStatus.CANCELLING:
-            if not can_transition_execution(snapshot.status, ExecutionStatus.CANCELLING):
-                return
-            snapshot = replace(
-                snapshot,
-                status=ExecutionStatus.CANCELLING,
-                revision=snapshot.revision + 1,
-                updated_at=updated_at,
-            )
-
-        if not can_transition_execution(snapshot.status, ExecutionStatus.CANCELLED):
-            self._snapshot = snapshot_to_payload(snapshot)
-            return
-
-        cancelled = replace(
-            snapshot,
-            status=ExecutionStatus.CANCELLED,
-            revision=snapshot.revision + 1,
-            updated_at=updated_at,
+    async def _apply_cancel(self) -> None:
+        self._snapshot = await workflow.execute_activity(
+            apply_execution_cancel,
+            args=[self._snapshot, workflow.now().isoformat()],
+            start_to_close_timeout=_ACTIVITY_TIMEOUT,
+            retry_policy=_ACTIVITY_RETRY,
         )
-        self._snapshot = snapshot_to_payload(cancelled)
