@@ -28,6 +28,7 @@ from engrammesh.modules.runtime.domain.model import (
     ExecutionSpec,
     ExecutionStatus,
 )
+from engrammesh.modules.runtime.ports import RuntimeOutboxPort
 from engrammesh.modules.runtime.runtime_state import CommittedRuntimeState
 from engrammesh.shared.kernel.ids import (
     AgentDefinitionId,
@@ -129,9 +130,11 @@ async def test_start_replay_without_snapshot_raises_not_found(
     index_key = (spec.scope.tenant_id, spec.idempotency_key)
     execution_id = ExecutionId.new()
 
-    def _seed_idempotency_only(
+    async def _seed_idempotency_only(
         state: CommittedRuntimeState,
+        outbox: RuntimeOutboxPort,
     ) -> CommittedRuntimeState:
+        del outbox
         idempotency_index = dict(state.idempotency_index)
         idempotency_index[index_key] = execution_id
         fingerprints = dict(state.fingerprints)

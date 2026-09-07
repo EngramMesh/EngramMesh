@@ -15,6 +15,7 @@ from runtime_database_contract import (
 from engrammesh.modules.runtime.adapters.postgres.database import (
     PostgresRuntimeDatabase,
 )
+from engrammesh.modules.runtime.ports import RuntimeOutboxPort
 from engrammesh.modules.runtime.runtime_state import CommittedRuntimeState
 from engrammesh.shared.kernel.ids import ExecutionId, TenantId
 
@@ -82,7 +83,11 @@ async def test_postgres_runtime_database_survives_reinstantiation(
     await database.open()
     try:
 
-        def _register(state: CommittedRuntimeState) -> CommittedRuntimeState:
+        async def _register(
+            state: CommittedRuntimeState,
+            outbox: RuntimeOutboxPort,
+        ) -> CommittedRuntimeState:
+            del outbox
             idempotency_index = dict(state.idempotency_index)
             idempotency_index[(tenant_id, "restart-key")] = execution_id
             fingerprints = dict(state.fingerprints)

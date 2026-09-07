@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import MappingProxyType
@@ -27,10 +27,12 @@ from engrammesh.modules.runtime.adapters.postgres.mappers import (
 from engrammesh.modules.runtime.adapters.shared.snapshot_codec import (
     fingerprint_to_json,
 )
+from engrammesh.modules.runtime.ports import RuntimeOutboxPort
 from engrammesh.modules.runtime.runtime_state import (
     CommittedRuntimeState,
     empty_runtime_state,
 )
+from engrammesh.shared.kernel.events import EventEnvelope
 from engrammesh.shared.kernel.ids import ExecutionId, TenantId
 
 _T = TypeVar("_T")
@@ -63,6 +65,13 @@ _SNAPSHOT_COLUMNS = (
 )
 
 
+class _DiscardRuntimeOutbox:
+    """Accept outbox publishes during PG writes; persistence is a later task."""
+
+    async def publish(self, event: EventEnvelope) -> None:
+        del event
+
+
 @final
 class PostgresRuntimeDatabase:
     """Persist committed execution snapshots and start-idempotency indexes."""
@@ -89,14 +98,18 @@ class PostgresRuntimeDatabase:
 
     async def write(
         self,
-        callback: Callable[[CommittedRuntimeState], CommittedRuntimeState],
+        callback: Callable[
+            [CommittedRuntimeState, RuntimeOutboxPort],
+            Awaitable[CommittedRuntimeState],
+        ],
     ) -> None:
         """Atomically replace committed state with *callback*'s result."""
         async with self._lock, self._connection.connection() as connection:
             for _ in range(_MAX_IDEMPOTENCY_WRITE_RETRIES):
                 async with connection.transaction():
                     before = await _load_state(connection)
-                    after = callback(before)
+                    outbox = _DiscardRuntimeOutbox()
+                    after = await callback(before, outbox)
                     try:
                         await _persist_state(connection, before, after)
                     except _IdempotencyInsertRaceError:
@@ -153,6 +166,7 @@ async def _load_state(connection: AsyncConnection) -> CommittedRuntimeState:
         snapshots=MappingProxyType(snapshots),
         idempotency_index=MappingProxyType(idempotency_index),
         fingerprints=MappingProxyType(fingerprints),
+        outbox_events=(),
     )
 
 

@@ -19,7 +19,11 @@ from engrammesh.modules.runtime.domain.model import (
     ExecutionStatus,
 )
 from engrammesh.modules.runtime.domain.state import can_transition_execution
-from engrammesh.modules.runtime.ports import ClockPort, RuntimeDatabasePort
+from engrammesh.modules.runtime.ports import (
+    ClockPort,
+    RuntimeDatabasePort,
+    RuntimeOutboxPort,
+)
 from engrammesh.modules.runtime.runtime_state import CommittedRuntimeState
 from engrammesh.shared.kernel.ids import ExecutionId, TenantId
 
@@ -152,7 +156,11 @@ class InMemoryOrchestratorPort:
         index_key = (spec.scope.tenant_id, spec.idempotency_key)
         updated_at = await self._clock.now()
 
-        def _start(state: CommittedRuntimeState) -> CommittedRuntimeState:
+        async def _start(
+            state: CommittedRuntimeState,
+            outbox: RuntimeOutboxPort,
+        ) -> CommittedRuntimeState:
+            del outbox
             existing_id = state.idempotency_index.get(index_key)
             if existing_id is not None:
                 stored_fingerprint = state.fingerprints.get(existing_id)
@@ -211,7 +219,11 @@ class InMemoryOrchestratorPort:
         del idempotency_key
         updated_at = await self._clock.now()
 
-        def _cancel(state: CommittedRuntimeState) -> CommittedRuntimeState:
+        async def _cancel(
+            state: CommittedRuntimeState,
+            outbox: RuntimeOutboxPort,
+        ) -> CommittedRuntimeState:
+            del outbox
             snapshot = _snapshot_for_scope(state, scope, execution_id)
             cancelled = _cancel_snapshot(snapshot, updated_at=updated_at)
             if cancelled is snapshot:

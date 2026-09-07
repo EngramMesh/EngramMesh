@@ -1,6 +1,6 @@
 """Async, framework-neutral ports for durable multi-Agent execution."""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol, runtime_checkable
@@ -195,5 +195,8 @@ class RuntimeDatabasePort(Protocol):
 
     async def write(
         self,
-        callback: Callable[[CommittedRuntimeState], CommittedRuntimeState],
+        callback: Callable[
+            [CommittedRuntimeState, RuntimeOutboxPort],
+            Awaitable[CommittedRuntimeState],
+        ],
     ) -> None: ...

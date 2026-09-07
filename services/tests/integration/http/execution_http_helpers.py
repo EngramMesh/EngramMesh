@@ -71,7 +71,8 @@ async def seed_succeeded_execution(runtime: AppRuntime, execution_id: ExecutionI
     orchestrator = runtime.start_execution_handler()._orchestrator
     assert isinstance(orchestrator, InMemoryOrchestratorPort)
 
-    def _mark_succeeded(state):
+    async def _mark_succeeded(state, outbox):
+        del outbox
         snapshot = state.snapshots[execution_id]
         return replace(
             state,
