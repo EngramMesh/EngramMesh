@@ -1666,7 +1666,7 @@ test_orchestration() {
     "links:--revision RANGE_TREE --lychee $lychee_stub" \
     "yaml:$valid_root" \
     "workflow:--root $valid_root --actionlint $actionlint_stub" \
-    'history:RANGE_TREE' \
+    'history:--range RANGE_BASE RANGE_HEAD' \
     >"$tmp_dir/orchestration-valid-range.expected"
   if ! cmp -s \
     "$tmp_dir/orchestration-valid-range.expected" "$orchestration_log"; then

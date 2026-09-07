@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import replace
 from types import MappingProxyType
 
+import psycopg
 import pytest
 
 from engrammesh.modules.runtime.adapters.postgres.database import (
@@ -48,7 +49,9 @@ async def test_runtime_database_write_then_read_round_trip(
 @pytest.mark.asyncio
 async def test_concurrent_idempotency_registration_is_idempotent(
     postgres_dsn: str,
+    postgres_connection: psycopg.Connection,
 ) -> None:
+    del postgres_connection
     database_a = PostgresRuntimeDatabase(postgres_dsn)
     database_b = PostgresRuntimeDatabase(postgres_dsn)
     await database_a.open()

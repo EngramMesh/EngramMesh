@@ -1,25 +1,22 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 1 ]; then
-  printf 'usage: %s REV\n' "$0" >&2
+usage() {
+  printf 'usage: %s REV | %s --range BASE HEAD\n' "$0" "$0" >&2
   exit 2
-fi
+}
 
-requested_revision=$1
-if ! revision=$(git rev-parse --verify "$requested_revision^{commit}" 2>/dev/null); then
-  printf 'invalid commit revision: %s\n' "$requested_revision" >&2
-  exit 1
-fi
+audit_private_history() {
+  revision_range=$1
 
-audit_dir=$(mktemp -d "${TMPDIR:-/tmp}/engrammesh-history.XXXXXX")
-trap 'rm -rf "$audit_dir"' EXIT HUP INT TERM
+  audit_dir=$(mktemp -d "${TMPDIR:-/tmp}/engrammesh-history.XXXXXX")
+  trap 'rm -rf "$audit_dir"' EXIT HUP INT TERM
 
-git rev-list --objects "$revision" >"$audit_dir/objects"
-git log -m -z --format= --name-only "$revision" >"$audit_dir/names"
+  git rev-list --objects "$revision_range" >"$audit_dir/objects"
+  git log -m -z --format= --name-only "$revision_range" >"$audit_dir/names"
 
-ruby - "$audit_dir/objects" "$audit_dir/names" \
-  "$audit_dir/offending-paths" <<'RUBY'
+  ruby - "$audit_dir/objects" "$audit_dir/names" \
+    "$audit_dir/offending-paths" <<'RUBY'
 # frozen_string_literal: true
 
 def decode_git_c_path(field)
@@ -164,3 +161,27 @@ if [ -s "$audit_dir/offending-paths" ]; then
   done <"$audit_dir/offending-paths"
   exit 1
 fi
+}
+
+case ${1:-} in
+  --range)
+    [ "$#" -eq 3 ] || usage
+    if ! base_revision=$(git rev-parse --verify "$2^{commit}" 2>/dev/null); then
+      printf 'invalid base commit revision: %s\n' "$2" >&2
+      exit 1
+    fi
+    if ! head_revision=$(git rev-parse --verify "$3^{commit}" 2>/dev/null); then
+      printf 'invalid head commit revision: %s\n' "$3" >&2
+      exit 1
+    fi
+    audit_private_history "$base_revision..$head_revision"
+    ;;
+  *)
+    [ "$#" -eq 1 ] || usage
+    if ! revision=$(git rev-parse --verify "$1^{commit}" 2>/dev/null); then
+      printf 'invalid commit revision: %s\n' "$1" >&2
+      exit 1
+    fi
+    audit_private_history "$revision"
+    ;;
+esac
