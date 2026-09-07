@@ -157,7 +157,9 @@ class InMemoryOrchestratorPort:
         self._clock = clock
         self._database = database
         if identities is None:
-            from engrammesh.bootstrap.infrastructure import UuidRuntimeIdentityPort
+            from engrammesh.modules.runtime.adapters.in_memory.identities import (
+                UuidRuntimeIdentityPort,
+            )
 
             identities = UuidRuntimeIdentityPort()
         self._identities = identities

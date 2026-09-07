@@ -90,7 +90,7 @@ def event_to_row(event: EventEnvelope) -> dict[str, object]:
             event.causation_id.value if event.causation_id is not None else None
         ),
         "occurred_at": event.occurred_at,
-        "payload": _to_json_value(event.payload),
+        "payload": to_json_value(event.payload),
     }
 
 
@@ -142,9 +142,9 @@ def _as_int(value: object) -> int:
     raise TypeError(msg)
 
 
-def _to_json_value(value: object) -> Any:
+def to_json_value(value: object) -> Any:
     if isinstance(value, Mapping):
-        return {str(key): _to_json_value(item) for key, item in value.items()}
+        return {str(key): to_json_value(item) for key, item in value.items()}
     if isinstance(value, tuple | list):
-        return [_to_json_value(item) for item in value]
+        return [to_json_value(item) for item in value]
     return value

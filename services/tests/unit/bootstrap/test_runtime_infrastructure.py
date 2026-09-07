@@ -4,11 +4,13 @@ import pytest
 
 from engrammesh.bootstrap.infrastructure import (
     EnvironmentGatedRuntimeAuthorization,
-    UuidRuntimeIdentityPort,
     create_runtime_authorization,
 )
 from engrammesh.bootstrap.settings import AppSettings, Environment
 from engrammesh.modules.memory.public import MemoryScope
+from engrammesh.modules.runtime.adapters.in_memory.identities import (
+    UuidRuntimeIdentityPort,
+)
 from engrammesh.modules.runtime.ports import RuntimeAuthorizationRequest
 from engrammesh.shared.kernel.ids import ExecutionId, SubjectId, TenantId
 

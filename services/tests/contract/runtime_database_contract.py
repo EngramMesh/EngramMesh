@@ -11,13 +11,22 @@ from uuid import UUID
 import pytest
 
 from engrammesh.modules.memory.public import MemoryScope
+from engrammesh.modules.runtime.adapters.shared.status_changed_event import (
+    build_execution_status_changed_event,
+)
 from engrammesh.modules.runtime.domain.model import ExecutionSnapshot, ExecutionStatus
 from engrammesh.modules.runtime.ports import RuntimeDatabasePort, RuntimeOutboxPort
 from engrammesh.modules.runtime.runtime_state import (
     CommittedRuntimeState,
     empty_runtime_state,
 )
-from engrammesh.shared.kernel.ids import ExecutionId, SubjectId, TenantId
+from engrammesh.shared.kernel.ids import (
+    CorrelationId,
+    EventId,
+    ExecutionId,
+    SubjectId,
+    TenantId,
+)
 
 NOW = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
 TENANT = TenantId(UUID("53dad495-7915-439a-b03a-379452a1aa86"))
@@ -164,6 +173,33 @@ async def assert_write_replaces_state_atomically(
     assert cleared == empty_runtime_state()
 
 
+async def assert_exception_after_outbox_publish_rolls_back(
+    make_database: RuntimeDatabaseFactory,
+) -> None:
+    database = await make_database()
+    snapshot = contract_snapshot()
+    event = build_execution_status_changed_event(
+        event_id=EventId.new(),
+        correlation_id=CorrelationId(snapshot.execution_id.value),
+        causation_id=None,
+        previous_status=None,
+        snapshot=snapshot,
+    )
+
+    with pytest.raises(RuntimeError, match="contract outbox-stage failure"):
+        async def _stage_and_fail(
+            state: CommittedRuntimeState,
+            outbox: RuntimeOutboxPort,
+        ) -> CommittedRuntimeState:
+            await outbox.publish(event)
+            raise RuntimeError("contract outbox-stage failure")
+
+        await database.write(_stage_and_fail)
+
+    outbox_count = await database.read(lambda state: len(state.outbox_events))
+    assert outbox_count == 0
+
+
 RUNTIME_DATABASE_CONTRACTS: tuple[
     tuple[str, RuntimeDatabaseContractAssertion],
     ...,
@@ -175,4 +211,8 @@ RUNTIME_DATABASE_CONTRACTS: tuple[
     ),
     ("write_persists_snapshot", assert_write_persists_snapshot),
     ("write_replaces_state_atomically", assert_write_replaces_state_atomically),
+    (
+        "exception_after_outbox_publish",
+        assert_exception_after_outbox_publish_rolls_back,
+    ),
 )

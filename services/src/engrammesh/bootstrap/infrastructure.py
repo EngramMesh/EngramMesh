@@ -26,7 +26,7 @@ from engrammesh.modules.runtime.ports import (
     RuntimeAuthorizationRequest,
 )
 from engrammesh.shared.kernel.events import EventEnvelope
-from engrammesh.shared.kernel.ids import EventId, ExecutionId, MemoryId
+from engrammesh.shared.kernel.ids import EventId, MemoryId
 
 
 @final
@@ -152,15 +152,6 @@ class TenantScopedRuntimeAuthorization:
             request.actor_id == principal.actor_id
             and request.scope.tenant_id == principal.tenant_id
         )
-
-
-@final
-class UuidRuntimeIdentityPort:
-    async def new_execution_id(self) -> ExecutionId:
-        return ExecutionId(uuid4())
-
-    async def new_event_id(self) -> EventId:
-        return EventId(uuid4())
 
 
 def create_runtime_authorization(settings: AppSettings) -> RuntimeAuthorizationPort:

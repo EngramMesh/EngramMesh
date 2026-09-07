@@ -280,3 +280,24 @@ async def test_cancel_from_running_emits_cancelling_and_cancelled_events() -> No
     assert cancel_events[0].payload["status"] == "cancelling"
     assert cancel_events[1].payload["previous_status"] == "cancelling"
     assert cancel_events[1].payload["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_cancel_from_cancelling_emits_single_cancelled_event() -> None:
+    database = InMemoryRuntimeDatabase()
+    orchestrator = InMemoryOrchestratorPort(SystemUtcClock(), database)
+    created = await orchestrator.start(_spec())
+    cancelling = replace(
+        created,
+        status=ExecutionStatus.CANCELLING,
+        revision=created.revision + 1,
+    )
+    database.replace_snapshot_for_tests(cancelling)
+
+    await orchestrator.cancel(cancelling.scope, cancelling.execution_id, "cancel-outbox")
+
+    events = await database.read(lambda state: state.outbox_events)
+    cancel_events = events[1:]
+    assert len(cancel_events) == 1
+    assert cancel_events[0].payload["previous_status"] == "cancelling"
+    assert cancel_events[0].payload["status"] == "cancelled"
