@@ -49,6 +49,9 @@ from engrammesh.modules.runtime.ports import (
     RuntimeAuthorizationPort,
     RuntimeDatabasePort,
     RuntimeIdentityPort,
+    RuntimeOutboxEventPublisher,
+    RuntimeOutboxPort,
+    RuntimeOutboxRelayStore,
     ToolExecutorPort,
     ToolRegistryPort,
 )
@@ -75,6 +78,9 @@ PROTOCOLS = (
     RemoteAgentPort,
     RuntimeAuthorizationPort,
     RuntimeIdentityPort,
+    RuntimeOutboxPort,
+    RuntimeOutboxRelayStore,
+    RuntimeOutboxEventPublisher,
     ClockPort,
 )
 
@@ -89,7 +95,10 @@ EXPECTED_METHODS = {
     ArtifactStorePort: ("put", "get"),
     RemoteAgentPort: ("invoke",),
     RuntimeAuthorizationPort: ("authorize",),
-    RuntimeIdentityPort: ("new_execution_id",),
+    RuntimeIdentityPort: ("new_execution_id", "new_event_id"),
+    RuntimeOutboxPort: ("publish",),
+    RuntimeOutboxRelayStore: ("fetch_unpublished", "mark_published", "count_unpublished"),
+    RuntimeOutboxEventPublisher: ("publish",),
     ClockPort: ("now",),
 }
 
