@@ -1,4 +1,5 @@
-from unittest.mock import AsyncMock, patch
+import asyncio
+from unittest.mock import AsyncMock, create_autospec, patch
 
 import pytest
 
@@ -9,8 +10,14 @@ from engrammesh.bootstrap.settings import (
     Environment,
     ModuleSettings,
 )
+from engrammesh.modules.memory.adapters.postgres.connection import (
+    PostgresMemoryDatabase as PostgresMemoryDatabaseType,
+)
 from engrammesh.modules.runtime.adapters.in_memory.orchestrator import (
     InMemoryOrchestratorPort,
+)
+from engrammesh.modules.runtime.adapters.postgres.database import (
+    PostgresRuntimeDatabase as PostgresRuntimeDatabaseType,
 )
 from engrammesh.modules.runtime.adapters.temporal.connection import (
     TemporalConnectionSettings,
@@ -24,6 +31,9 @@ from engrammesh.modules.runtime.application.cancel_execution import (
 from engrammesh.modules.runtime.application.get_execution_snapshot import (
     GetExecutionSnapshotHandler,
 )
+from engrammesh.modules.runtime.application.relay_outbox import (
+    RelayRuntimeOutboxEventsHandler,
+)
 from engrammesh.modules.runtime.application.start_execution import StartExecutionHandler
 
 
@@ -35,6 +45,20 @@ def _test_settings(**overrides: object) -> AppSettings:
     }
     values.update(overrides)
     return AppSettings.model_validate(values)
+
+
+def _mock_postgres_memory_database() -> PostgresMemoryDatabaseType:
+    database = create_autospec(PostgresMemoryDatabaseType, instance=True)
+    database.open = AsyncMock()
+    database.close = AsyncMock()
+    return database
+
+
+def _mock_postgres_runtime_database() -> PostgresRuntimeDatabaseType:
+    database = create_autospec(PostgresRuntimeDatabaseType, instance=True)
+    database.open = AsyncMock()
+    database.close = AsyncMock()
+    return database
 
 
 def test_start_execution_handler_when_runtime_disabled_raises() -> None:
@@ -62,6 +86,75 @@ def test_cancel_execution_handler_when_runtime_disabled_raises() -> None:
     with pytest.raises(ConfigurationError) as exc_info:
         runtime.cancel_execution_handler()
     assert exc_info.value.code == "runtime_disabled"
+
+
+@pytest.mark.asyncio
+async def test_relay_runtime_outbox_handler_when_relay_disabled_raises() -> None:
+    runtime = create_runtime(_test_settings(runtime_outbox_relay={"enabled": False}))
+    with (
+        patch("engrammesh.bootstrap.composition.PostgresMemoryDatabase") as memory_cls,
+        patch("engrammesh.bootstrap.composition.PostgresRuntimeDatabase") as runtime_cls,
+    ):
+        memory_cls.return_value = _mock_postgres_memory_database()
+        runtime_cls.return_value = _mock_postgres_runtime_database()
+        await runtime.startup()
+        with pytest.raises(ConfigurationError) as exc_info:
+            runtime.relay_runtime_outbox_handler()
+        assert exc_info.value.code == "runtime_outbox_relay_disabled"
+        await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_relay_runtime_outbox_handler_before_startup_raises() -> None:
+    runtime = create_runtime(_test_settings())
+    with pytest.raises(RuntimeError, match="application runtime is not started"):
+        runtime.relay_runtime_outbox_handler()
+
+
+@pytest.mark.asyncio
+async def test_relay_runtime_outbox_handler_returns_cached_handler() -> None:
+    runtime = create_runtime(_test_settings())
+    with (
+        patch("engrammesh.bootstrap.composition.PostgresMemoryDatabase") as memory_cls,
+        patch("engrammesh.bootstrap.composition.PostgresRuntimeDatabase") as runtime_cls,
+    ):
+        memory_cls.return_value = _mock_postgres_memory_database()
+        runtime_cls.return_value = _mock_postgres_runtime_database()
+        await runtime.startup()
+        first = runtime.relay_runtime_outbox_handler()
+        second = runtime.relay_runtime_outbox_handler()
+        assert isinstance(first, RelayRuntimeOutboxEventsHandler)
+        assert first is second
+        publisher = runtime.logging_runtime_outbox_event_publisher
+        assert first._publisher is publisher
+        assert second._publisher is publisher
+        await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_run_runtime_outbox_relay_loop_exits_immediately_when_stopped() -> None:
+    runtime = create_runtime(_test_settings())
+    stop_event = asyncio.Event()
+    stop_event.set()
+
+    with (
+        patch("engrammesh.bootstrap.composition.PostgresMemoryDatabase") as memory_cls,
+        patch("engrammesh.bootstrap.composition.PostgresRuntimeDatabase") as runtime_cls,
+    ):
+        memory_cls.return_value = _mock_postgres_memory_database()
+        runtime_cls.return_value = _mock_postgres_runtime_database()
+        await runtime.startup()
+        with patch(
+            "engrammesh.bootstrap.composition.AppRuntime.relay_runtime_outbox_once",
+            new_callable=AsyncMock,
+        ) as relay_mock:
+            await runtime.run_runtime_outbox_relay_loop(
+                batch_size=10,
+                interval_seconds=0.01,
+                stop_event=stop_event,
+            )
+            relay_mock.assert_not_awaited()
+        await runtime.shutdown()
 
 
 @pytest.mark.asyncio
@@ -183,13 +276,16 @@ async def test_shutdown_clears_runtime_handlers() -> None:
         patch("engrammesh.bootstrap.composition.PostgresMemoryDatabase") as memory_cls,
         patch("engrammesh.bootstrap.composition.PostgresRuntimeDatabase") as runtime_cls,
     ):
-        memory_cls.return_value.open = AsyncMock()
-        memory_cls.return_value.close = AsyncMock()
-        runtime_cls.return_value.open = AsyncMock()
-        runtime_cls.return_value.close = AsyncMock()
+        memory_cls.return_value = _mock_postgres_memory_database()
+        runtime_cls.return_value = _mock_postgres_runtime_database()
         await runtime.startup()
         start_handler = runtime.start_execution_handler()
+        relay_handler = runtime.relay_runtime_outbox_handler()
+        logging_publisher = runtime.logging_runtime_outbox_event_publisher
         await runtime.shutdown()
         with pytest.raises(RuntimeError, match="application runtime is not started"):
             runtime.start_execution_handler()
-        del start_handler
+        with pytest.raises(RuntimeError, match="application runtime is not started"):
+            runtime.relay_runtime_outbox_handler()
+        assert runtime.logging_runtime_outbox_event_publisher is not logging_publisher
+        del start_handler, relay_handler

@@ -141,6 +141,30 @@ class OutboxRelaySettings(_FrozenSettingsModel):
         return value
 
 
+class RuntimeOutboxRelaySettings(_FrozenSettingsModel):
+    """Runtime outbox relay polling and batch dispatch boundary."""
+
+    enabled: bool = True
+    batch_size: int = 100
+    poll_interval_seconds: float = 1.0
+
+    @field_validator("batch_size")
+    @classmethod
+    def require_positive_batch_size(cls, value: int) -> int:
+        if value <= 0:
+            msg = "batch_size must be positive"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("poll_interval_seconds")
+    @classmethod
+    def require_positive_poll_interval(cls, value: float) -> float:
+        if value <= 0:
+            msg = "poll_interval_seconds must be positive"
+            raise ValueError(msg)
+        return value
+
+
 class OidcSettings(_FrozenSettingsModel):
     """OIDC JWT verification boundary."""
 
@@ -173,6 +197,7 @@ class AppSettings(BaseSettings):
     http: HttpSettings = HttpSettings()
     inbox: InboxSettings = InboxSettings()
     outbox_relay: OutboxRelaySettings = OutboxRelaySettings()
+    runtime_outbox_relay: RuntimeOutboxRelaySettings = RuntimeOutboxRelaySettings()
     oidc: OidcSettings = OidcSettings()
 
     @model_validator(mode="after")

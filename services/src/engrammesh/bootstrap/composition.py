@@ -10,6 +10,7 @@ from engrammesh.bootstrap.auth.ports import TokenVerifierPort
 from engrammesh.bootstrap.infrastructure import (
     InboxOutboxEventPublisher,
     LoggingOutboxEventPublisher,
+    LoggingRuntimeOutboxEventPublisher,
     SystemUtcClock,
     UuidMemoryIdentityPort,
     UuidRuntimeIdentityPort,
@@ -48,7 +49,10 @@ from engrammesh.modules.runtime.adapters.in_memory.database import (
 from engrammesh.modules.runtime.adapters.in_memory.orchestrator import (
     InMemoryOrchestratorPort,
 )
-from engrammesh.modules.runtime.adapters.postgres import PostgresRuntimeDatabase
+from engrammesh.modules.runtime.adapters.postgres import (
+    PostgresRuntimeDatabase,
+    PostgresRuntimeOutboxRelayStore,
+)
 from engrammesh.modules.runtime.adapters.postgres.database import (
     PostgresRuntimeDatabase as PostgresRuntimeDatabaseType,
 )
@@ -62,8 +66,15 @@ from engrammesh.modules.runtime.adapters.temporal.orchestrator import (
 from engrammesh.modules.runtime.application.cancel_execution import (
     CancelExecutionHandler,
 )
+from engrammesh.modules.runtime.application.contracts import (
+    RelayRuntimeOutboxCommand,
+    RelayRuntimeOutboxResult,
+)
 from engrammesh.modules.runtime.application.get_execution_snapshot import (
     GetExecutionSnapshotHandler,
+)
+from engrammesh.modules.runtime.application.relay_outbox import (
+    RelayRuntimeOutboxEventsHandler,
 )
 from engrammesh.modules.runtime.application.start_execution import StartExecutionHandler
 from engrammesh.modules.runtime.ports import OrchestratorPort, RuntimeDatabasePort
@@ -97,10 +108,12 @@ class AppRuntime:
         "_inbox_handler",
         "_list_episodes_handler",
         "_logging_publisher",
+        "_logging_runtime_outbox_publisher",
         "_orchestrator",
         "_outbox_publisher",
         "_relay_handler",
         "_runtime_database",
+        "_runtime_relay_handler",
         "_settings",
         "_start_execution_handler",
         "_started",
@@ -121,6 +134,8 @@ class AppRuntime:
         self._logging_publisher = LoggingOutboxEventPublisher()
         self._outbox_publisher: OutboxEventPublisher = self._logging_publisher
         self._relay_handler: RelayOutboxEventsHandler | None = None
+        self._logging_runtime_outbox_publisher = LoggingRuntimeOutboxEventPublisher()
+        self._runtime_relay_handler: RelayRuntimeOutboxEventsHandler | None = None
         self._runtime_database: RuntimeDatabasePort | None = None
         self._orchestrator: OrchestratorPort | None = None
         self._temporal_client: Any = None
@@ -166,6 +181,7 @@ class AppRuntime:
                 self._outbox_publisher = self._logging_publisher
 
         if self._settings.modules.runtime_enabled and self._orchestrator is None:
+            self._logging_runtime_outbox_publisher = LoggingRuntimeOutboxEventPublisher()
             if isinstance(self._database, PostgresMemoryDatabaseType):
                 self._runtime_database = PostgresRuntimeDatabase(
                     self._settings.postgres.dsn.get_secret_value()
@@ -212,6 +228,7 @@ class AppRuntime:
         self._list_episodes_handler = None
         self._inbox_handler = None
         self._relay_handler = None
+        self._runtime_relay_handler = None
         self._runtime_database = None
         self._orchestrator = None
         self._temporal_client = None
@@ -220,6 +237,7 @@ class AppRuntime:
         self._cancel_execution_handler = None
         self._logging_publisher = LoggingOutboxEventPublisher()
         self._outbox_publisher = LoggingOutboxEventPublisher()
+        self._logging_runtime_outbox_publisher = LoggingRuntimeOutboxEventPublisher()
         self._started = False
         if isinstance(runtime_database, PostgresRuntimeDatabaseType):
             await runtime_database.close()
@@ -233,6 +251,10 @@ class AppRuntime:
     @property
     def logging_outbox_event_publisher(self) -> LoggingOutboxEventPublisher:
         return self._logging_publisher
+
+    @property
+    def logging_runtime_outbox_event_publisher(self) -> LoggingRuntimeOutboxEventPublisher:
+        return self._logging_runtime_outbox_publisher
 
     def process_inbox_handler(self) -> ProcessInboxEventHandler:
         if not self._settings.modules.memory_enabled:
@@ -355,6 +377,27 @@ class AppRuntime:
             )
         return self._cancel_execution_handler
 
+    def relay_runtime_outbox_handler(self) -> RelayRuntimeOutboxEventsHandler:
+        if not self._settings.modules.runtime_enabled:
+            msg = "runtime module is disabled"
+            raise ConfigurationError("runtime_disabled", msg)
+        if self._orchestrator is None or self._runtime_database is None:
+            msg = "application runtime is not started"
+            raise RuntimeError(msg)
+        if not self._settings.runtime_outbox_relay.enabled:
+            msg = "runtime outbox relay is disabled"
+            raise ConfigurationError("runtime_outbox_relay_disabled", msg)
+        if not isinstance(self._runtime_database, PostgresRuntimeDatabaseType):
+            msg = "runtime outbox relay requires postgres runtime database"
+            raise ConfigurationError("runtime_outbox_relay_storage_unconfigured", msg)
+        if self._runtime_relay_handler is None:
+            self._runtime_relay_handler = RelayRuntimeOutboxEventsHandler(
+                clock=SystemUtcClock(),
+                store=PostgresRuntimeOutboxRelayStore(self._runtime_database),
+                publisher=self._logging_runtime_outbox_publisher,
+            )
+        return self._runtime_relay_handler
+
     async def relay_outbox_once(
         self,
         *,
@@ -367,6 +410,19 @@ class AppRuntime:
             else self._settings.outbox_relay.batch_size
         )
         return await handler.handle(RelayOutboxCommand(batch_size=size))
+
+    async def relay_runtime_outbox_once(
+        self,
+        *,
+        batch_size: int | None = None,
+    ) -> RelayRuntimeOutboxResult:
+        handler = self.relay_runtime_outbox_handler()
+        size = (
+            batch_size
+            if batch_size is not None
+            else self._settings.runtime_outbox_relay.batch_size
+        )
+        return await handler.handle(RelayRuntimeOutboxCommand(batch_size=size))
 
     async def run_outbox_relay_loop(
         self,
@@ -387,6 +443,28 @@ class AppRuntime:
         )
         while not stop_event.is_set():
             result = await self.relay_outbox_once(batch_size=size)
+            if result.fetched < size:
+                await asyncio.sleep(interval)
+
+    async def run_runtime_outbox_relay_loop(
+        self,
+        *,
+        batch_size: int | None = None,
+        interval_seconds: float | None = None,
+        stop_event: asyncio.Event,
+    ) -> None:
+        size = (
+            batch_size
+            if batch_size is not None
+            else self._settings.runtime_outbox_relay.batch_size
+        )
+        interval = (
+            interval_seconds
+            if interval_seconds is not None
+            else self._settings.runtime_outbox_relay.poll_interval_seconds
+        )
+        while not stop_event.is_set():
+            result = await self.relay_runtime_outbox_once(batch_size=size)
             if result.fetched < size:
                 await asyncio.sleep(interval)
 
