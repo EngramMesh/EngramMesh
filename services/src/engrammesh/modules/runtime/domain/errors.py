@@ -19,3 +19,9 @@ class ExecutionNotFound(LookupError):
 class InvalidExecutionTransition(ValueError):
     def __init__(self) -> None:
         super().__init__()
+
+
+@final
+class InvalidExecutionCursor(ValueError):
+    def __init__(self) -> None:
+        super().__init__()
