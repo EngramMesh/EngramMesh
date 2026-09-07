@@ -27,6 +27,7 @@ from engrammesh.modules.runtime.adapters.temporal.activities import (
     advance_to_succeeded,
     apply_execution_cancel,
     configure_runtime_outbox_writer,
+    configure_runtime_snapshot_writer,
 )
 from engrammesh.modules.runtime.adapters.temporal.orchestrator import (
     TemporalOrchestratorPort,
@@ -81,14 +82,76 @@ def snapshot_writer() -> InMemoryRuntimeSnapshotWriter:
     outbox = InMemoryRuntimeOutboxWriter()
     writer = InMemoryRuntimeSnapshotWriter()
     configure_runtime_outbox_writer(outbox)
-    # Activities are not wired here: this test asserts orchestrator start projection
-    # before lifecycle activities overwrite the pending revision-1 snapshot.
+    configure_runtime_snapshot_writer(writer)
+    yield writer
+    configure_runtime_outbox_writer(None)
+    configure_runtime_snapshot_writer(None)
+
+
+@pytest.fixture
+def start_projection_writer() -> InMemoryRuntimeSnapshotWriter:
+    outbox = InMemoryRuntimeOutboxWriter()
+    writer = InMemoryRuntimeSnapshotWriter()
+    configure_runtime_outbox_writer(outbox)
     yield writer
     configure_runtime_outbox_writer(None)
 
 
 @pytest.mark.asyncio
 async def test_start_projects_pending_snapshot_with_worker_running(
+    start_projection_writer: InMemoryRuntimeSnapshotWriter,
+) -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        worker = Worker(
+            env.client,
+            task_queue=TASK_QUEUE,
+            workflows=[ExecutionLifecycleWorkflow],
+            activities=[
+                advance_to_planning,
+                advance_to_running,
+                advance_to_succeeded,
+                apply_execution_cancel,
+            ],
+        )
+        orchestrator = TemporalOrchestratorPort(
+            env.client,
+            task_queue=TASK_QUEUE,
+            index=InMemoryRuntimeDatabase(),
+            clock=SystemUtcClock(),
+            snapshot_writer=start_projection_writer,
+        )
+        spec = _spec()
+        async with worker:
+            await orchestrator.start(spec)
+        assert spec.id in start_projection_writer.snapshots
+        pending = next(
+            snapshot
+            for snapshot in start_projection_writer.upsert_history
+            if snapshot.execution_id == spec.id
+        )
+        assert pending.status == ExecutionStatus.PENDING
+        assert pending.revision == 1
+
+
+async def _poll_until_succeeded(
+    orchestrator: TemporalOrchestratorPort,
+    scope: MemoryScope,
+    execution_id: ExecutionId,
+    *,
+    env: WorkflowEnvironment,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + 30.0
+    while asyncio.get_running_loop().time() < deadline:
+        snapshot = await orchestrator.get_snapshot(scope, execution_id)
+        if snapshot.status is ExecutionStatus.SUCCEEDED:
+            return
+        await env.sleep(0.05)
+    snapshot = await orchestrator.get_snapshot(scope, execution_id)
+    assert snapshot.status is ExecutionStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_projects_terminal_status(
     snapshot_writer: InMemoryRuntimeSnapshotWriter,
 ) -> None:
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -113,8 +176,11 @@ async def test_start_projects_pending_snapshot_with_worker_running(
         spec = _spec()
         async with worker:
             await orchestrator.start(spec)
-            # Allow workflow to reach initial pending snapshot before activities advance
-            await asyncio.sleep(0.05)
+            await _poll_until_succeeded(
+                orchestrator,
+                spec.scope,
+                spec.id,
+                env=env,
+            )
         assert spec.id in snapshot_writer.snapshots
-        assert snapshot_writer.snapshots[spec.id].status == ExecutionStatus.PENDING
-        assert snapshot_writer.snapshots[spec.id].revision == 1
+        assert snapshot_writer.snapshots[spec.id].status == ExecutionStatus.SUCCEEDED

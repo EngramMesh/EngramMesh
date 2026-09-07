@@ -12,12 +12,16 @@ from engrammesh.bootstrap.settings import AppSettings, ConfigurationError
 from engrammesh.modules.runtime.adapters.postgres.outbox_writer import (
     PostgresRuntimeOutboxWriter,
 )
+from engrammesh.modules.runtime.adapters.postgres.snapshot_writer import (
+    PostgresRuntimeSnapshotWriter,
+)
 from engrammesh.modules.runtime.adapters.temporal.activities import (
     advance_to_planning,
     advance_to_running,
     advance_to_succeeded,
     apply_execution_cancel,
     configure_runtime_outbox_writer,
+    configure_runtime_snapshot_writer,
 )
 from engrammesh.modules.runtime.adapters.temporal.connection import (
     TemporalConnectionSettings,
@@ -46,6 +50,11 @@ async def run_worker(settings: AppSettings) -> None:
     )
     await outbox_writer.open()
     configure_runtime_outbox_writer(outbox_writer)
+    snapshot_writer = PostgresRuntimeSnapshotWriter(
+        settings.postgres.dsn.get_secret_value(),
+    )
+    await snapshot_writer.open()
+    configure_runtime_snapshot_writer(snapshot_writer)
 
     worker = Worker(
         client,
@@ -73,7 +82,9 @@ async def run_worker(settings: AppSettings) -> None:
             await shutdown_event.wait()
     finally:
         configure_runtime_outbox_writer(None)
+        configure_runtime_snapshot_writer(None)
         await outbox_writer.close()
+        await snapshot_writer.close()
 
 
 def main() -> None:

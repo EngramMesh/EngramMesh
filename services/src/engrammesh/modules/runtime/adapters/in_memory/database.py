@@ -8,6 +8,10 @@ from dataclasses import replace
 from types import MappingProxyType
 from typing import TypeVar, final
 
+from engrammesh.modules.memory.public import MemoryScope
+from engrammesh.modules.runtime.domain.execution_cursor import (
+    decode_execution_cursor,
+)
 from engrammesh.modules.runtime.domain.model import ExecutionSnapshot
 from engrammesh.modules.runtime.ports import RuntimeOutboxPort
 from engrammesh.modules.runtime.runtime_state import (
@@ -74,6 +78,45 @@ class InMemoryRuntimeDatabase:
             committed,
             snapshots=MappingProxyType(snapshots),
         )
+
+    async def stream(
+        self,
+        scope: MemoryScope,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> tuple[ExecutionSnapshot, ...]:
+        if cursor is not None and limit is None:
+            msg = "cursor requires limit"
+            raise ValueError(msg)
+        if limit is not None and limit <= 0:
+            msg = "limit must be positive"
+            raise ValueError(msg)
+
+        async with self._lock:
+            rows = [
+                snapshot
+                for snapshot in self._state.snapshots.values()
+                if snapshot.scope == scope
+            ]
+
+        rows.sort(
+            key=lambda snapshot: (snapshot.updated_at, snapshot.execution_id.value),
+            reverse=True,
+        )
+
+        if cursor is not None:
+            cursor_at, cursor_id = decode_execution_cursor(cursor)
+            cursor_key = (cursor_at, cursor_id.value)
+            rows = [
+                snapshot
+                for snapshot in rows
+                if (snapshot.updated_at, snapshot.execution_id.value) < cursor_key
+            ]
+
+        if limit is not None:
+            rows = rows[:limit]
+        return tuple(rows)
 
 
 ExecutionIndex = InMemoryRuntimeDatabase

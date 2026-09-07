@@ -225,3 +225,20 @@ class StartExecutionResponse(ExecutionSnapshotResponse):
     """HTTP response body for a started or replayed execution."""
 
     created: bool
+
+
+class ExecutionSummaryResponse(_HttpSchemaModel):
+    """HTTP response body for one execution list item."""
+
+    execution_id: UUID
+    scope: ScopeResponse
+    revision: int = Field(ge=0)
+    status: ExecutionStatus
+    updated_at: datetime
+
+
+class ListExecutionsResponse(_HttpSchemaModel):
+    """HTTP response body for a paginated execution list."""
+
+    items: tuple[ExecutionSummaryResponse, ...]
+    next_cursor: str | None

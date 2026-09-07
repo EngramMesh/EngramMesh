@@ -371,3 +371,29 @@ async def test_staging_with_injected_verifier_allows_start() -> None:
         await runtime.shutdown()
 
     assert response.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_list_executions_without_bearer_returns_401() -> None:
+    runtime = await start_runtime_with_in_memory(make_oidc_test_settings())
+    try:
+        @asynccontextmanager
+        async def lifespan(_app: FastAPI):
+            yield
+
+        app = create_app(runtime, lifespan=lifespan)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as oidc_client:
+            response = await oidc_client.get(
+                f"/v1/tenants/{TENANT_A}/executions",
+                params={
+                    "subject_id": str(SUBJECT_ID),
+                    "workspace_id": "workspace-42",
+                },
+            )
+    finally:
+        await runtime.shutdown()
+
+    assert response.status_code == 401

@@ -18,6 +18,7 @@ from engrammesh.bootstrap.composition import AppRuntime, ReadinessError
 from engrammesh.bootstrap.http.errors import register_exception_handlers
 from engrammesh.bootstrap.http.mappers import (
     episode_to_response,
+    execution_list_item_to_response,
     parse_correlation_id,
     resolve_query_actor_id,
     snapshot_to_response,
@@ -27,12 +28,14 @@ from engrammesh.bootstrap.http.mappers import (
     to_get_episode_query,
     to_get_execution_snapshot_query,
     to_list_episodes_query,
+    to_list_executions_query,
     to_response,
     to_start_execution_command,
 )
 from engrammesh.bootstrap.http.schemas import (
     CancelExecutionRequest,
     ListEpisodesResponse,
+    ListExecutionsResponse,
     RecordEpisodeRequest,
     StartExecutionRequest,
 )
@@ -200,6 +203,45 @@ def create_app(
                 status_code=201 if result.created else 200,
                 content=response.model_dump(mode="json"),
             )
+
+    @app.get("/v1/tenants/{tenant_id}/executions")
+    async def list_executions(
+        tenant_id: UUID,
+        subject_id: Annotated[UUID, Query()],
+        actor_id: Annotated[UUID | None, Query()] = None,
+        workspace_id: Annotated[str | None, Query()] = None,
+        agent_id: Annotated[UUID | None, Query()] = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Query()] = None,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+    ) -> JSONResponse:
+        async with execution_auth_context(
+            oidc_enabled=runtime.settings.oidc.enabled,
+            path_tenant_id=tenant_id,
+            authorization=authorization,
+            verifier=verifier,
+        ) as principal:
+            resolved_actor_id = resolve_query_actor_id(
+                principal=principal,
+                query_actor_id=actor_id,
+            )
+            query = to_list_executions_query(
+                path_tenant_id=TenantId(tenant_id),
+                actor_id=resolved_actor_id,
+                subject_id=SubjectId(subject_id),
+                workspace_id=workspace_id,
+                agent_id=AgentInstanceId(agent_id) if agent_id is not None else None,
+                limit=limit,
+                cursor=cursor,
+            )
+            result = await runtime.list_executions_handler().handle(query)
+            response = ListExecutionsResponse(
+                items=tuple(
+                    execution_list_item_to_response(item) for item in result.items
+                ),
+                next_cursor=result.next_cursor,
+            )
+            return JSONResponse(content=response.model_dump(mode="json"))
 
     @app.get("/v1/tenants/{tenant_id}/executions/{execution_id}")
     async def get_execution(

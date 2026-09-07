@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://engrammesh.org/contracts/runtime/v1/execution-list-response.schema.json",
+  "version": "1.0.0",
+  "title": "Runtime Execution List HTTP Response",
+  "description": "Version 1.0.0 contract for durable execution list HTTP responses.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "items",
+    "next_cursor"
+  ],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "https://engrammesh.org/contracts/runtime/v1/execution-summary-response.schema.json"
+      }
+    },
+    "next_cursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

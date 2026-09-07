@@ -1,7 +1,12 @@
 from dataclasses import dataclass
+from datetime import datetime
 
 from engrammesh.modules.memory.public import MemoryQuery, MemoryScope
-from engrammesh.modules.runtime.domain.model import Budget, ExecutionSnapshot
+from engrammesh.modules.runtime.domain.model import (
+    Budget,
+    ExecutionSnapshot,
+    ExecutionStatus,
+)
 from engrammesh.shared.kernel.ids import (
     AgentDefinitionId,
     ArtifactId,
@@ -65,6 +70,33 @@ class CancelExecutionCommand:
 @dataclass(frozen=True, slots=True)
 class CancelExecutionResult:
     snapshot: ExecutionSnapshot
+
+
+@dataclass(frozen=True, slots=True)
+class ListExecutionsQuery:
+    actor_id: SubjectId
+    scope: MemoryScope
+    limit: int
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.limit <= 0 or self.limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionListItem:
+    execution_id: ExecutionId
+    scope: MemoryScope
+    revision: int
+    status: ExecutionStatus
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ListExecutionsResult:
+    items: tuple[ExecutionListItem, ...]
+    next_cursor: str | None
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://engrammesh.org/contracts/runtime/v1/execution-summary-response.schema.json",
+  "version": "1.0.0",
+  "title": "Runtime Execution Summary HTTP Response",
+  "description": "Version 1.0.0 contract for durable execution list item HTTP responses.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "execution_id",
+    "scope",
+    "revision",
+    "status",
+    "updated_at"
+  ],
+  "properties": {
+    "execution_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "scope": {
+      "$ref": "#/$defs/httpMemoryScope"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "status": {
+      "$ref": "#/$defs/executionStatus"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    }
+  },
+  "$defs": {
+    "httpMemoryScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenant_id",
+        "subject_id"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "subject_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "workspace_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "agent_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        }
+      }
+    },
+    "executionStatus": {
+      "enum": [
+        "pending",
+        "planning",
+        "running",
+        "waiting",
+        "retrying",
+        "cancelling",
+        "compensating",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ]
+    }
+  }
+}

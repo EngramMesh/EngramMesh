@@ -52,8 +52,10 @@ from engrammesh.modules.runtime.adapters.in_memory.orchestrator import (
     InMemoryOrchestratorPort,
 )
 from engrammesh.modules.runtime.adapters.postgres import (
+    PostgresExecutionSnapshotStore,
     PostgresRuntimeDatabase,
     PostgresRuntimeOutboxRelayStore,
+    PostgresRuntimeSnapshotWriter,
 )
 from engrammesh.modules.runtime.adapters.postgres.database import (
     PostgresRuntimeDatabase as PostgresRuntimeDatabaseType,
@@ -75,11 +77,18 @@ from engrammesh.modules.runtime.application.contracts import (
 from engrammesh.modules.runtime.application.get_execution_snapshot import (
     GetExecutionSnapshotHandler,
 )
+from engrammesh.modules.runtime.application.list_executions import (
+    ListExecutionsHandler,
+)
 from engrammesh.modules.runtime.application.relay_outbox import (
     RelayRuntimeOutboxEventsHandler,
 )
 from engrammesh.modules.runtime.application.start_execution import StartExecutionHandler
-from engrammesh.modules.runtime.ports import OrchestratorPort, RuntimeDatabasePort
+from engrammesh.modules.runtime.ports import (
+    ExecutionSnapshotStore,
+    OrchestratorPort,
+    RuntimeDatabasePort,
+)
 
 
 def load_settings() -> AppSettings:
@@ -104,11 +113,13 @@ class AppRuntime:
     __slots__ = (
         "_cancel_execution_handler",
         "_database",
+        "_execution_snapshot_store",
         "_get_episode_handler",
         "_get_execution_snapshot_handler",
         "_handler",
         "_inbox_handler",
         "_list_episodes_handler",
+        "_list_executions_handler",
         "_logging_publisher",
         "_logging_runtime_outbox_publisher",
         "_orchestrator",
@@ -116,6 +127,7 @@ class AppRuntime:
         "_relay_handler",
         "_runtime_database",
         "_runtime_relay_handler",
+        "_runtime_snapshot_writer",
         "_settings",
         "_start_execution_handler",
         "_started",
@@ -144,6 +156,9 @@ class AppRuntime:
         self._start_execution_handler: StartExecutionHandler | None = None
         self._get_execution_snapshot_handler: GetExecutionSnapshotHandler | None = None
         self._cancel_execution_handler: CancelExecutionHandler | None = None
+        self._list_executions_handler: ListExecutionsHandler | None = None
+        self._execution_snapshot_store: ExecutionSnapshotStore | None = None
+        self._runtime_snapshot_writer: PostgresRuntimeSnapshotWriter | None = None
         self._started = False
 
     @property
@@ -196,6 +211,22 @@ class AppRuntime:
                 )
             else:
                 self._runtime_database = InMemoryRuntimeDatabase()
+            if (
+                isinstance(self._runtime_database, PostgresRuntimeDatabaseType)
+                and self._settings.temporal.enabled
+            ):
+                self._runtime_snapshot_writer = PostgresRuntimeSnapshotWriter(
+                    self._settings.postgres.dsn.get_secret_value(),
+                )
+                await self._runtime_snapshot_writer.open()
+            else:
+                self._runtime_snapshot_writer = None
+            if isinstance(self._runtime_database, PostgresRuntimeDatabaseType):
+                self._execution_snapshot_store = PostgresExecutionSnapshotStore(
+                    self._runtime_database,
+                )
+            else:
+                self._execution_snapshot_store = self._runtime_database
             if self._settings.temporal.enabled:
                 temporal = self._settings.temporal
                 self._temporal_client = await connect_temporal_client(
@@ -218,20 +249,25 @@ class AppRuntime:
             task_queue=self._settings.temporal.task_queue,
             index=self._runtime_database,
             clock=clock,
+            snapshot_writer=self._runtime_snapshot_writer,
         )
 
     async def shutdown(self) -> None:
         database = self._database
         runtime_database = self._runtime_database
+        runtime_snapshot_writer = self._runtime_snapshot_writer
         self._database = None
         self._unit_of_work_factory = None
         self._handler = None
         self._get_episode_handler = None
         self._list_episodes_handler = None
+        self._list_executions_handler = None
+        self._execution_snapshot_store = None
         self._inbox_handler = None
         self._relay_handler = None
         self._runtime_relay_handler = None
         self._runtime_database = None
+        self._runtime_snapshot_writer = None
         self._orchestrator = None
         self._temporal_client = None
         self._start_execution_handler = None
@@ -241,6 +277,8 @@ class AppRuntime:
         self._outbox_publisher = LoggingOutboxEventPublisher()
         self._logging_runtime_outbox_publisher = LoggingRuntimeOutboxEventPublisher()
         self._started = False
+        if runtime_snapshot_writer is not None:
+            await runtime_snapshot_writer.close()
         if isinstance(runtime_database, PostgresRuntimeDatabaseType):
             await runtime_database.close()
         if database is not None:
@@ -378,6 +416,20 @@ class AppRuntime:
                 orchestrator=self._orchestrator,
             )
         return self._cancel_execution_handler
+
+    def list_executions_handler(self) -> ListExecutionsHandler:
+        if not self._settings.modules.runtime_enabled:
+            msg = "runtime module is disabled"
+            raise ConfigurationError("runtime_disabled", msg)
+        if self._orchestrator is None or self._execution_snapshot_store is None:
+            msg = "application runtime is not started"
+            raise RuntimeError(msg)
+        if self._list_executions_handler is None:
+            self._list_executions_handler = ListExecutionsHandler(
+                authorization=create_runtime_authorization(self._settings),
+                snapshot_store=self._execution_snapshot_store,
+            )
+        return self._list_executions_handler
 
     def relay_runtime_outbox_handler(self) -> RelayRuntimeOutboxEventsHandler:
         if not self._settings.modules.runtime_enabled:

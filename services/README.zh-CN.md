@@ -345,12 +345,11 @@ Temporal 测试使用 `WorkflowEnvironment` 时间跳过，验证工作流完成
 
 本切片明确不包含：
 
-- 执行列表 HTTP API（后续 ④d）
-- Temporal → PostgreSQL 快照投影（后续 ④e）
 - LangGraph、PlannerPort、AgentEnginePort、完整 Plan DAG 执行
 - Claim 提取（Phase 2）
 
-详见 `docs/rfcs/2026-09-07-runtime-outbox.md`、
+详见 `docs/rfcs/2026-09-07-execution-list-api.md`、
+`docs/rfcs/2026-09-07-runtime-outbox.md`、
 `docs/rfcs/2026-08-04-execution-snapshot-store.md`、
 `docs/rfcs/2026-07-31-temporal-runtime-adapter.md` 与
 `docs/superpowers/specs/2026-07-31-temporal-runtime-adapter-design.md`。
@@ -741,6 +740,7 @@ curl -sS -X POST "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-37945
 | `422` | `actor_id_not_allowed` | 启用 OIDC；query 中提供了 `actor_id` |
 | `422` | `actor_id_required` | 关闭 OIDC；query 中缺少 `actor_id` |
 | `422` | `invalid_episode_cursor` | 列表游标格式非法 |
+| `422` | `invalid_execution_cursor` | 执行列表游标格式非法 |
 | `422` | `validation_error` | UUID 非法、`limit` 超出范围（`1`–`100`） |
 | `503` | `service_unavailable` | `ConfigurationError`（如 `memory_disabled`） |
 
@@ -771,14 +771,22 @@ curl -sS "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/
 ## 执行 HTTP API
 
 `bootstrap/http/` 通过 `AppRuntime.start_execution_handler()`、
-`get_execution_snapshot_handler()` 与 `cancel_execution_handler()` 暴露持久化执行控制。
-路由使用 `execution_auth_context` 处理 OIDC（见[授权](#授权)）。FastAPI 与 uvicorn 仅出现在 bootstrap；运行时应用 Handler 保持与框架无关。
+`get_execution_snapshot_handler()`、`list_executions_handler()` 与
+`cancel_execution_handler()` 暴露持久化执行控制。路由使用 `execution_auth_context`
+处理 OIDC（见[授权](#授权)）。FastAPI 与 uvicorn 仅出现在 bootstrap；运行时应用
+Handler 保持与框架无关。
+
+**一致性：** `GET /executions/{id}` 读取编排器权威快照（实时）。`GET /executions`
+读取 PostgreSQL 投影（最终一致）。Temporal 列表需要 `PostgresRuntimeDatabase` 与
+`PostgresRuntimeSnapshotWriter`；`temporal.enabled` 搭配 `InMemoryRuntimeDatabase`
+不会填充列表投影。
 
 ### 端点
 
 | 方法 | 路径 | 成功状态码 | 说明 |
 |------|------|-----------|------|
 | `POST` | `/v1/tenants/{tenant_id}/executions` | `201` 或 `200` | 启动一次执行；新建为 `201`，精确幂等重放为 `200` |
+| `GET` | `/v1/tenants/{tenant_id}/executions` | `200` / `403` / `422` | 按 scope 列出执行摘要（键集分页） |
 | `GET` | `/v1/tenants/{tenant_id}/executions/{execution_id}` | `200` / `403` / `404` / `422` / `503` | 按精确 scope 读取执行快照 |
 | `POST` | `/v1/tenants/{tenant_id}/executions/{execution_id}/cancel` | `200` / `403` / `404` / `409` / `422` / `503` | 取消一次执行 |
 
@@ -792,6 +800,7 @@ curl -sS "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/
 |------|--------|--------|
 | `POST .../executions` | `201` | `ExecutionSnapshotResponse` + `created: true` |
 | `POST .../executions` | `200` | `ExecutionSnapshotResponse` + `created: false`（幂等重放） |
+| `GET .../executions` | `200` | `ExecutionListResponse`（见 `execution-list-response.schema.json`） |
 | `GET .../executions/{execution_id}` | `200` | `ExecutionSnapshotResponse`（见 `execution-snapshot-response.schema.json`） |
 | `POST .../executions/{execution_id}/cancel` | `200` | `ExecutionSnapshotResponse` |
 
