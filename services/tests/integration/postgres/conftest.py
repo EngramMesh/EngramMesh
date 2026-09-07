@@ -22,6 +22,7 @@ _DATA_TABLES = (
     "memory_episode_idempotency",
     "memory_episodes",
     "runtime_execution_snapshots",
+    "runtime_outbox_events",
     "runtime_start_idempotency",
 )
 

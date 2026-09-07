@@ -19,6 +19,7 @@ from engrammesh.modules.runtime.adapters.postgres.connection import (
 from engrammesh.modules.runtime.adapters.postgres.mappers import (
     _as_uuid,
     _to_json_value,
+    event_to_row,
     idempotency_to_row,
     row_to_fingerprint,
     row_to_snapshot,
@@ -64,12 +65,33 @@ _SNAPSHOT_COLUMNS = (
     "updated_at",
 )
 
+_OUTBOX_COLUMNS = (
+    "event_id",
+    "event_type",
+    "schema_version",
+    "tenant_id",
+    "aggregate_id",
+    "aggregate_version",
+    "correlation_id",
+    "causation_id",
+    "occurred_at",
+    "payload",
+)
 
-class _DiscardRuntimeOutbox:
-    """Accept outbox publishes during PG writes; persistence is a later task."""
+
+class _BufferingRuntimeOutbox:
+    """Collect outbox events until a PostgreSQL write commits."""
+
+    __slots__ = ("_events",)
+
+    def __init__(self) -> None:
+        self._events: list[EventEnvelope] = []
 
     async def publish(self, event: EventEnvelope) -> None:
-        del event
+        self._events.append(event)
+
+    def buffered_events(self) -> tuple[EventEnvelope, ...]:
+        return tuple(self._events)
 
 
 @final
@@ -90,6 +112,12 @@ class PostgresRuntimeDatabase:
         """Close the connection pool."""
         await self._connection.close()
 
+    @asynccontextmanager
+    async def connection(self) -> AsyncIterator[AsyncConnection]:
+        """Borrow a pooled connection with migrations applied once."""
+        async with self._connection.connection() as connection:
+            yield connection
+
     async def read(self, callback: Callable[[CommittedRuntimeState], _T]) -> _T:
         """Run *callback* against the current committed state."""
         async with _transactional_connection(self._lock, self._connection) as connection:
@@ -108,10 +136,15 @@ class PostgresRuntimeDatabase:
             for _ in range(_MAX_IDEMPOTENCY_WRITE_RETRIES):
                 async with connection.transaction():
                     before = await _load_state(connection)
-                    outbox = _DiscardRuntimeOutbox()
+                    outbox = _BufferingRuntimeOutbox()
                     after = await callback(before, outbox)
                     try:
-                        await _persist_state(connection, before, after)
+                        await _persist_state(
+                            connection,
+                            before,
+                            after,
+                            outbox.buffered_events(),
+                        )
                     except _IdempotencyInsertRaceError:
                         continue
                     return
@@ -174,9 +207,40 @@ async def _persist_state(
     connection: AsyncConnection,
     before: CommittedRuntimeState,
     after: CommittedRuntimeState,
+    outbox_events: tuple[EventEnvelope, ...],
 ) -> None:
     await _persist_idempotency(connection, before, after)
     await _persist_snapshots(connection, before, after)
+    await _persist_outbox(connection, outbox_events)
+
+
+async def _persist_outbox(
+    connection: AsyncConnection,
+    outbox_events: tuple[EventEnvelope, ...],
+) -> None:
+    if not outbox_events:
+        return
+    async with connection.cursor() as cursor:
+        for event in outbox_events:
+            row = event_to_row(event)
+            await cursor.execute(
+                f"""
+                INSERT INTO runtime_outbox_events ({", ".join(_OUTBOX_COLUMNS)})
+                VALUES ({", ".join("%s" for _ in _OUTBOX_COLUMNS)})
+                """,
+                (
+                    row["event_id"],
+                    row["event_type"],
+                    row["schema_version"],
+                    row["tenant_id"],
+                    row["aggregate_id"],
+                    row["aggregate_version"],
+                    row["correlation_id"],
+                    row["causation_id"],
+                    row["occurred_at"],
+                    Jsonb(_to_json_value(row["payload"])),
+                ),
+            )
 
 
 async def _persist_idempotency(

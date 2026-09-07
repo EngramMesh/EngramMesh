@@ -25,6 +25,7 @@ def test_apply_runtime_migrations_creates_runtime_tables(
     ).fetchall()
     assert [row[0] for row in rows] == [
         "runtime_execution_snapshots",
+        "runtime_outbox_events",
         "runtime_schema_migrations",
         "runtime_start_idempotency",
     ]

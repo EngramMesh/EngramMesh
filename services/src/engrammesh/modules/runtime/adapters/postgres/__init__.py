@@ -10,10 +10,14 @@ from engrammesh.modules.runtime.adapters.postgres.migrations import (
     MIGRATIONS_DIR,
     apply_runtime_migrations,
 )
+from engrammesh.modules.runtime.adapters.postgres.outbox_relay import (
+    PostgresRuntimeOutboxRelayStore,
+)
 
 __all__ = [
     "MIGRATIONS_DIR",
     "PostgresRuntimeConnection",
     "PostgresRuntimeDatabase",
+    "PostgresRuntimeOutboxRelayStore",
     "apply_runtime_migrations",
 ]
