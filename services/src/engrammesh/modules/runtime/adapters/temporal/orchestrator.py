@@ -35,6 +35,7 @@ from engrammesh.modules.runtime.ports import (
     ClockPort,
     RuntimeDatabasePort,
     RuntimeOutboxPort,
+    RuntimeSnapshotWriterPort,
 )
 from engrammesh.modules.runtime.runtime_state import CommittedRuntimeState
 from engrammesh.shared.kernel.ids import ExecutionId, TenantId
@@ -84,7 +85,7 @@ def _snapshot_for_scope(
 class TemporalOrchestratorPort:
     """OrchestratorPort backed by Temporal workflows and a shared idempotency index."""
 
-    __slots__ = ("_client", "_clock", "_index", "_task_queue")
+    __slots__ = ("_client", "_clock", "_index", "_snapshot_writer", "_task_queue")
 
     def __init__(
         self,
@@ -93,11 +94,13 @@ class TemporalOrchestratorPort:
         task_queue: str,
         index: RuntimeDatabasePort,
         clock: ClockPort,
+        snapshot_writer: RuntimeSnapshotWriterPort | None = None,
     ) -> None:
         self._client = client
         self._task_queue = task_queue
         self._index = index
         self._clock = clock
+        self._snapshot_writer = snapshot_writer
 
     @property
     def index(self) -> RuntimeDatabasePort:
@@ -141,11 +144,14 @@ class TemporalOrchestratorPort:
 
         if is_new:
             await self._start_workflow_or_raise(spec, execution_id, rollback=True)
-            return await self._query_snapshot(
+            snapshot = await self._query_snapshot(
                 spec.scope.tenant_id,
                 execution_id,
                 spec.scope,
             )
+            if self._snapshot_writer is not None:
+                await self._snapshot_writer.upsert_snapshot(snapshot)
+            return snapshot
 
         try:
             return await self._query_snapshot(
