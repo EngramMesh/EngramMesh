@@ -35,6 +35,13 @@ from engrammesh.shared.kernel.ids import ExecutionId, TenantId
 
 _T = TypeVar("_T")
 
+_MAX_IDEMPOTENCY_WRITE_RETRIES = 5
+
+
+class _IdempotencyInsertRaceError(Exception):
+    """Concurrent idempotency insert; retry write from fresh committed state."""
+
+
 _IDEMPOTENCY_COLUMNS = (
     "tenant_id",
     "idempotency_key",
@@ -85,10 +92,18 @@ class PostgresRuntimeDatabase:
         callback: Callable[[CommittedRuntimeState], CommittedRuntimeState],
     ) -> None:
         """Atomically replace committed state with *callback*'s result."""
-        async with _transactional_connection(self._lock, self._connection) as connection:
-            before = await _load_state(connection)
-            after = callback(before)
-            await _persist_state(connection, before, after)
+        async with self._lock, self._connection.connection() as connection:
+            for _ in range(_MAX_IDEMPOTENCY_WRITE_RETRIES):
+                async with connection.transaction():
+                    before = await _load_state(connection)
+                    after = callback(before)
+                    try:
+                        await _persist_state(connection, before, after)
+                    except _IdempotencyInsertRaceError:
+                        continue
+                    return
+            msg = "runtime idempotency write exceeded retry limit"
+            raise RuntimeError(msg)
 
 
 @asynccontextmanager
@@ -181,19 +196,25 @@ async def _persist_idempotency(
                 fingerprint,
                 created_at=created_at,
             )
-            await cursor.execute(
-                f"""
-                INSERT INTO runtime_start_idempotency ({", ".join(_IDEMPOTENCY_COLUMNS)})
-                VALUES ({", ".join("%s" for _ in _IDEMPOTENCY_COLUMNS)})
-                """,
-                (
-                    row["tenant_id"],
-                    row["idempotency_key"],
-                    row["execution_id"],
-                    Jsonb(_to_json_value(row["fingerprint"])),
-                    row["created_at"],
-                ),
-            )
+            async with connection.cursor(row_factory=dict_row) as returning_cursor:
+                await returning_cursor.execute(
+                    f"""
+                    INSERT INTO runtime_start_idempotency ({", ".join(_IDEMPOTENCY_COLUMNS)})
+                    VALUES ({", ".join("%s" for _ in _IDEMPOTENCY_COLUMNS)})
+                    ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+                    RETURNING execution_id
+                    """,
+                    (
+                        row["tenant_id"],
+                        row["idempotency_key"],
+                        row["execution_id"],
+                        Jsonb(_to_json_value(row["fingerprint"])),
+                        row["created_at"],
+                    ),
+                )
+                inserted = await returning_cursor.fetchone()
+            if inserted is None:
+                raise _IdempotencyInsertRaceError()
 
         for key in before_keys & after_keys:
             tenant_id, idempotency_key = key
