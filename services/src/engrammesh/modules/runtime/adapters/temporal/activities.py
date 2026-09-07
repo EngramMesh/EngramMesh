@@ -14,15 +14,26 @@ from engrammesh.modules.runtime.adapters.temporal.mappers import (
 )
 from engrammesh.modules.runtime.domain.model import ExecutionSnapshot, ExecutionStatus
 from engrammesh.modules.runtime.domain.state import can_transition_execution
-from engrammesh.modules.runtime.ports import RuntimeOutboxWriterPort
+from engrammesh.modules.runtime.ports import (
+    RuntimeOutboxWriterPort,
+    RuntimeSnapshotWriterPort,
+)
 from engrammesh.shared.kernel.ids import CorrelationId
 
 _writer: RuntimeOutboxWriterPort | None = None
+_snapshot_writer: RuntimeSnapshotWriterPort | None = None
 
 
 def configure_runtime_outbox_writer(writer: RuntimeOutboxWriterPort | None) -> None:
     global _writer
     _writer = writer
+
+
+def configure_runtime_snapshot_writer(
+    writer: RuntimeSnapshotWriterPort | None,
+) -> None:
+    global _snapshot_writer
+    _snapshot_writer = writer
 
 
 def _parse_updated_at(updated_at_iso: str) -> datetime:
@@ -47,6 +58,12 @@ async def _publish_status_changed(
     )
 
 
+async def _upsert_snapshot(snapshot: ExecutionSnapshot) -> None:
+    if _snapshot_writer is None:
+        return
+    await _snapshot_writer.upsert_snapshot(snapshot)
+
+
 async def _advance_status(
     snapshot_payload: dict[str, Any],
     *,
@@ -65,6 +82,7 @@ async def _advance_status(
         updated_at=_parse_updated_at(updated_at_iso),
     )
     await _publish_status_changed(previous_status=previous_status, snapshot=advanced)
+    await _upsert_snapshot(advanced)
     return snapshot_to_payload(advanced)
 
 
@@ -92,6 +110,7 @@ async def _apply_cancel(
             updated_at=updated_at,
         )
         await _publish_status_changed(previous_status=previous_status, snapshot=snapshot)
+        await _upsert_snapshot(snapshot)
 
     if not can_transition_execution(snapshot.status, ExecutionStatus.CANCELLED):
         return snapshot_to_payload(snapshot)
@@ -106,6 +125,7 @@ async def _apply_cancel(
         previous_status=snapshot.status,
         snapshot=cancelled,
     )
+    await _upsert_snapshot(cancelled)
     return snapshot_to_payload(cancelled)
 
 
