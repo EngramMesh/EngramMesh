@@ -9,10 +9,15 @@ from temporalio.worker import Worker
 
 from engrammesh.bootstrap.composition import load_settings
 from engrammesh.bootstrap.settings import AppSettings, ConfigurationError
+from engrammesh.modules.runtime.adapters.postgres.outbox_writer import (
+    PostgresRuntimeOutboxWriter,
+)
 from engrammesh.modules.runtime.adapters.temporal.activities import (
     advance_to_planning,
     advance_to_running,
     advance_to_succeeded,
+    apply_execution_cancel,
+    configure_runtime_outbox_writer,
 )
 from engrammesh.modules.runtime.adapters.temporal.connection import (
     TemporalConnectionSettings,
@@ -36,6 +41,12 @@ async def run_worker(settings: AppSettings) -> None:
             tls=temporal.tls,
         )
     )
+    outbox_writer = PostgresRuntimeOutboxWriter(
+        settings.postgres.dsn.get_secret_value(),
+    )
+    await outbox_writer.open()
+    configure_runtime_outbox_writer(outbox_writer)
+
     worker = Worker(
         client,
         task_queue=settings.temporal.task_queue,
@@ -44,6 +55,7 @@ async def run_worker(settings: AppSettings) -> None:
             advance_to_planning,
             advance_to_running,
             advance_to_succeeded,
+            apply_execution_cancel,
         ],
     )
 
@@ -56,8 +68,12 @@ async def run_worker(settings: AppSettings) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _request_shutdown)
 
-    async with worker:
-        await shutdown_event.wait()
+    try:
+        async with worker:
+            await shutdown_event.wait()
+    finally:
+        configure_runtime_outbox_writer(None)
+        await outbox_writer.close()
 
 
 def main() -> None:

@@ -1,11 +1,9 @@
-"""Integration tests for TemporalOrchestratorPort with WorkflowEnvironment."""
+"""Integration tests for runtime outbox publishing from Temporal activities."""
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from types import MappingProxyType
 from typing import Any
 from uuid import UUID
 
@@ -19,27 +17,27 @@ from engrammesh.modules.memory.public import MemoryScope
 from engrammesh.modules.runtime.adapters.in_memory.database import (
     InMemoryRuntimeDatabase,
 )
+from engrammesh.modules.runtime.adapters.in_memory.outbox_writer import (
+    InMemoryRuntimeOutboxWriter,
+)
 from engrammesh.modules.runtime.adapters.temporal.activities import (
     advance_to_planning,
     advance_to_running,
     advance_to_succeeded,
     apply_execution_cancel,
+    configure_runtime_outbox_writer,
 )
 from engrammesh.modules.runtime.adapters.temporal.orchestrator import (
     TemporalOrchestratorPort,
-    _spec_fingerprint,
 )
 from engrammesh.modules.runtime.adapters.temporal.workflows import (
     ExecutionLifecycleWorkflow,
 )
-from engrammesh.modules.runtime.application.errors import OrchestrationUnavailable
 from engrammesh.modules.runtime.domain.model import (
     Budget,
     ExecutionSpec,
     ExecutionStatus,
 )
-from engrammesh.modules.runtime.ports import RuntimeOutboxPort
-from engrammesh.modules.runtime.runtime_state import CommittedRuntimeState
 from engrammesh.shared.kernel.ids import (
     AgentDefinitionId,
     ArtifactId,
@@ -51,7 +49,7 @@ from engrammesh.shared.kernel.ids import (
 NOW = datetime(2026, 7, 31, 12, 0, tzinfo=UTC)
 TENANT = TenantId(UUID("108440a7-5e06-49b0-ae10-42323fe84860"))
 SUBJECT = SubjectId(UUID("dc63fae9-dcc3-4f2d-93ee-b573b89693d7"))
-TASK_QUEUE = "temporal-orchestrator-test"
+TASK_QUEUE = "temporal-runtime-outbox-test"
 SLOW_ACTIVITY_DELAY_S = 0.5
 
 
@@ -91,13 +89,9 @@ def _budget() -> Budget:
     )
 
 
-def _spec(
-    *,
-    execution_id: ExecutionId | None = None,
-    key: str = "exec-1",
-) -> ExecutionSpec:
+def _spec(*, key: str = "outbox-lifecycle") -> ExecutionSpec:
     return ExecutionSpec(
-        id=execution_id or ExecutionId.new(),
+        id=ExecutionId.new(),
         scope=MemoryScope(TENANT, SUBJECT, workspace_id="ws-1"),
         objective_ref=ArtifactId(UUID("d3d34bf3-6ce6-475b-b960-3097cc3f639f")),
         root_agent_id=AgentDefinitionId(UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")),
@@ -105,6 +99,23 @@ def _spec(
         budget=_budget(),
         idempotency_key=key,
     )
+
+
+def _production_activities() -> list[object]:
+    return [
+        advance_to_planning,
+        advance_to_running,
+        advance_to_succeeded,
+        apply_execution_cancel,
+    ]
+
+
+@pytest.fixture
+def runtime_outbox_writer() -> InMemoryRuntimeOutboxWriter:
+    writer = InMemoryRuntimeOutboxWriter()
+    configure_runtime_outbox_writer(writer)
+    yield writer
+    configure_runtime_outbox_writer(None)
 
 
 async def _poll_until(
@@ -118,11 +129,7 @@ async def _poll_until(
 ) -> ExecutionStatus:
     deadline = asyncio.get_running_loop().time() + timeout_s
     while asyncio.get_running_loop().time() < deadline:
-        try:
-            snapshot = await orchestrator.get_snapshot(scope, execution_id)
-        except OrchestrationUnavailable:
-            await env.sleep(0.05)
-            continue
+        snapshot = await orchestrator.get_snapshot(scope, execution_id)
         if snapshot.status is target:
             return snapshot.status
         await env.sleep(0.05)
@@ -137,7 +144,6 @@ async def _poll_until_active(
     *,
     env: WorkflowEnvironment,
 ) -> ExecutionStatus:
-    """Return the first in-flight status before terminal completion."""
     deadline = asyncio.get_running_loop().time() + 10.0
     while asyncio.get_running_loop().time() < deadline:
         snapshot = await orchestrator.get_snapshot(scope, execution_id)
@@ -158,9 +164,11 @@ async def _poll_until_active(
     return snapshot.status
 
 
-@pytest.mark.temporal
 @pytest.mark.asyncio
-async def test_temporal_start_get_succeeds() -> None:
+@pytest.mark.temporal
+async def test_temporal_lifecycle_emits_three_status_changed_events(
+    runtime_outbox_writer: InMemoryRuntimeOutboxWriter,
+) -> None:
     async with await WorkflowEnvironment.start_time_skipping() as env:
         index = InMemoryRuntimeDatabase()
         orchestrator = TemporalOrchestratorPort(
@@ -174,16 +182,9 @@ async def test_temporal_start_get_succeeds() -> None:
             env.client,
             task_queue=TASK_QUEUE,
             workflows=[ExecutionLifecycleWorkflow],
-            activities=[
-                advance_to_planning,
-                advance_to_running,
-                advance_to_succeeded,
-                apply_execution_cancel,
-            ],
+            activities=_production_activities(),
         ):
             started = await orchestrator.start(spec)
-            assert started.status is ExecutionStatus.PENDING
-
             final_status = await _poll_until(
                 orchestrator,
                 spec.scope,
@@ -193,14 +194,19 @@ async def test_temporal_start_get_succeeds() -> None:
             )
             assert final_status is ExecutionStatus.SUCCEEDED
 
-            fetched = await orchestrator.get_snapshot(spec.scope, started.execution_id)
-            assert fetched.status is ExecutionStatus.SUCCEEDED
-            assert fetched.execution_id == started.execution_id
+    assert len(runtime_outbox_writer.events) == 3
+    assert [event.payload["status"] for event in runtime_outbox_writer.events] == [
+        "planning",
+        "running",
+        "succeeded",
+    ]
 
 
-@pytest.mark.temporal
 @pytest.mark.asyncio
-async def test_temporal_start_idempotent_replay() -> None:
+@pytest.mark.temporal
+async def test_temporal_cancel_mid_flight_emits_cancel_events(
+    runtime_outbox_writer: InMemoryRuntimeOutboxWriter,
+) -> None:
     async with await WorkflowEnvironment.start_time_skipping() as env:
         index = InMemoryRuntimeDatabase()
         orchestrator = TemporalOrchestratorPort(
@@ -209,39 +215,7 @@ async def test_temporal_start_idempotent_replay() -> None:
             index=index,
             clock=SystemUtcClock(),
         )
-        async with Worker(
-            env.client,
-            task_queue=TASK_QUEUE,
-            workflows=[ExecutionLifecycleWorkflow],
-            activities=[
-                advance_to_planning,
-                advance_to_running,
-                advance_to_succeeded,
-                apply_execution_cancel,
-            ],
-        ):
-            first = await orchestrator.start(
-                _spec(execution_id=ExecutionId.new(), key="replay")
-            )
-            second = await orchestrator.start(
-                _spec(execution_id=ExecutionId.new(), key="replay")
-            )
-
-            assert second.execution_id == first.execution_id
-
-
-@pytest.mark.temporal
-@pytest.mark.asyncio
-async def test_temporal_cancel_from_running() -> None:
-    async with await WorkflowEnvironment.start_time_skipping() as env:
-        index = InMemoryRuntimeDatabase()
-        orchestrator = TemporalOrchestratorPort(
-            env.client,
-            task_queue=TASK_QUEUE,
-            index=index,
-            clock=SystemUtcClock(),
-        )
-        spec = _spec(key="cancel-running")
+        spec = _spec(key="outbox-cancel")
         async with Worker(
             env.client,
             task_queue=TASK_QUEUE,
@@ -269,112 +243,14 @@ async def test_temporal_cancel_from_running() -> None:
             cancelled = await orchestrator.cancel(
                 spec.scope,
                 started.execution_id,
-                "cancel-1",
+                "cancel-outbox-1",
             )
             assert cancelled.status is ExecutionStatus.CANCELLED
 
-
-@pytest.mark.temporal
-@pytest.mark.asyncio
-async def test_temporal_survives_worker_restart() -> None:
-    # Local dev server is required here: time-skipping test server does not
-    # reliably resume in-flight workflows across worker process restarts.
-    async with await WorkflowEnvironment.start_local() as env:
-        index = InMemoryRuntimeDatabase()
-        orchestrator = TemporalOrchestratorPort(
-            env.client,
-            task_queue=TASK_QUEUE,
-            index=index,
-            clock=SystemUtcClock(),
-        )
-        spec = _spec(key="worker-restart")
-        worker_kwargs = {
-            "client": env.client,
-            "task_queue": TASK_QUEUE,
-            "workflows": [ExecutionLifecycleWorkflow],
-            "activities": [
-                advance_to_planning,
-                advance_to_running,
-                advance_to_succeeded,
-                apply_execution_cancel,
-            ],
-        }
-
-        async with Worker(**worker_kwargs):
-            started = await orchestrator.start(spec)
-            await _poll_until_active(
-                orchestrator,
-                spec.scope,
-                started.execution_id,
-                env=env,
-            )
-
-        async with Worker(**worker_kwargs):
-            final_status = await _poll_until(
-                orchestrator,
-                spec.scope,
-                started.execution_id,
-                target=ExecutionStatus.SUCCEEDED,
-                env=env,
-                timeout_s=30.0,
-            )
-            assert final_status is ExecutionStatus.SUCCEEDED
-
-
-@pytest.mark.temporal
-@pytest.mark.asyncio
-async def test_temporal_recovers_orphaned_index_entry() -> None:
-    async with await WorkflowEnvironment.start_time_skipping() as env:
-        index = InMemoryRuntimeDatabase()
-        orchestrator = TemporalOrchestratorPort(
-            env.client,
-            task_queue=TASK_QUEUE,
-            index=index,
-            clock=SystemUtcClock(),
-        )
-        spec = _spec(execution_id=ExecutionId.new(), key="orphan-recovery")
-        fingerprint = _spec_fingerprint(spec)
-        index_key = (spec.scope.tenant_id, spec.idempotency_key)
-
-        async def _seed_orphan(
-            state: CommittedRuntimeState,
-            outbox: RuntimeOutboxPort,
-        ) -> CommittedRuntimeState:
-            del outbox
-            idempotency_index = dict(state.idempotency_index)
-            idempotency_index[index_key] = spec.id
-            fingerprints = dict(state.fingerprints)
-            fingerprints[spec.id] = fingerprint
-            return replace(
-                state,
-                idempotency_index=MappingProxyType(idempotency_index),
-                fingerprints=MappingProxyType(fingerprints),
-            )
-
-        await index.write(_seed_orphan)
-
-        async with Worker(
-            env.client,
-            task_queue=TASK_QUEUE,
-            workflows=[ExecutionLifecycleWorkflow],
-            activities=[
-                advance_to_planning,
-                advance_to_running,
-                advance_to_succeeded,
-                apply_execution_cancel,
-            ],
-        ):
-            started = await orchestrator.start(
-                _spec(execution_id=ExecutionId.new(), key="orphan-recovery")
-            )
-            assert started.execution_id == spec.id
-            assert started.status is ExecutionStatus.PENDING
-
-            final_status = await _poll_until(
-                orchestrator,
-                spec.scope,
-                started.execution_id,
-                target=ExecutionStatus.SUCCEEDED,
-                env=env,
-            )
-            assert final_status is ExecutionStatus.SUCCEEDED
+    cancel_statuses = [
+        event.payload["status"]
+        for event in runtime_outbox_writer.events
+        if event.payload["status"] in {"cancelling", "cancelled"}
+    ]
+    assert 1 <= len(cancel_statuses) <= 2
+    assert cancel_statuses[-1] == "cancelled"
