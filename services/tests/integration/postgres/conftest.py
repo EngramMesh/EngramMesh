@@ -43,6 +43,12 @@ def postgres_connection(postgres_dsn: str) -> Iterator[Connection]:
     with psycopg.connect(postgres_dsn) as connection:
         apply_migrations(connection)
         apply_runtime_migrations(connection)
+        with connection.transaction():
+            connection.execute(
+                "TRUNCATE "
+                + ", ".join(_DATA_TABLES)
+                + " RESTART IDENTITY CASCADE"
+            )
         yield connection
         with connection.transaction():
             connection.execute(

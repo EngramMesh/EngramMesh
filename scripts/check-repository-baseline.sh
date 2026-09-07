@@ -242,14 +242,48 @@ for ignored_path in \
   docs/plans/probe
 do
   if ! git check-ignore -- "$ignored_path" >/dev/null 2>&1; then
+    if [ -n "${POLICY_BASE_SHA:-}" ] &&
+      base_revision=$(git rev-parse --verify "$POLICY_BASE_SHA^{commit}" 2>/dev/null) &&
+      git ls-tree -r --name-only "$base_revision" -- "$ignored_path" |
+        grep -q .
+    then
+      continue
+    fi
     printf 'expected ignored local artifact path is not ignored: %s\n' "$ignored_path" >&2
     exit 1
   fi
 done
 
-if git ls-files -ci --exclude-standard | grep . >/dev/null 2>&1; then
-  printf 'an ignored local artifact is tracked\n' >&2
-  exit 1
+tracked_ignored_at_head=$(
+  git ls-files -ci --exclude-standard || true
+)
+if [ -n "$tracked_ignored_at_head" ]; then
+  if [ -n "${POLICY_BASE_SHA:-}" ] &&
+    base_revision=$(git rev-parse --verify "$POLICY_BASE_SHA^{commit}" 2>/dev/null)
+  then
+    tracked_ignored_tmp=$(mktemp "${TMPDIR:-/tmp}/engrammesh-tracked-ignored.XXXXXX")
+    tracked_ignored_base_tmp="${tracked_ignored_tmp}.base"
+    tracked_ignored_head_tmp="${tracked_ignored_tmp}.head"
+    trap 'rm -f "$tracked_ignored_tmp" "$tracked_ignored_base_tmp" "$tracked_ignored_head_tmp"' \
+      EXIT HUP INT TERM
+    git ls-tree -r --name-only "$base_revision" |
+      while IFS= read -r path; do
+        if git check-ignore --no-index -- "$path" >/dev/null 2>&1; then
+          printf '%s\n' "$path"
+        fi
+      done | LC_ALL=C sort -u >"$tracked_ignored_base_tmp"
+    printf '%s\n' "$tracked_ignored_at_head" | LC_ALL=C sort -u >"$tracked_ignored_head_tmp"
+    if comm -13 "$tracked_ignored_base_tmp" "$tracked_ignored_head_tmp" | grep -q .; then
+      rm -f "$tracked_ignored_tmp" "$tracked_ignored_base_tmp" "$tracked_ignored_head_tmp"
+      printf 'an ignored local artifact is tracked\n' >&2
+      exit 1
+    fi
+    rm -f "$tracked_ignored_tmp" "$tracked_ignored_base_tmp" "$tracked_ignored_head_tmp"
+    trap - EXIT HUP INT TERM
+  else
+    printf 'an ignored local artifact is tracked\n' >&2
+    exit 1
+  fi
 fi
 
 printf 'repository baseline: ok\n'

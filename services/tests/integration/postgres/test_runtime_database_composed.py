@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from types import MappingProxyType
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID
 
 import psycopg
@@ -220,7 +220,7 @@ async def test_temporal_orchestrator_persists_idempotency_only(
     client.start_workflow = AsyncMock()
     handle = AsyncMock()
     handle.query = AsyncMock(return_value=snapshot_to_payload(snapshot))
-    client.get_workflow_handle = AsyncMock(return_value=handle)
+    client.get_workflow_handle = Mock(return_value=handle)
 
     database = PostgresRuntimeDatabase(postgres_dsn)
     await database.open()

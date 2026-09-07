@@ -126,7 +126,15 @@ require_absolute_executable actionlint "$actionlint_bin"
   ruby "$script_dir/check-workflow-policy.rb" \
     --root "$repository_root" \
     --actionlint "$actionlint_bin"
-  "$script_dir/check-private-history.sh" "$tree_revision"
+  case $dco_mode in
+    --range)
+      "$script_dir/check-private-history.sh" \
+        --range "$dco_base" "$dco_head"
+      ;;
+    --all)
+      "$script_dir/check-private-history.sh" "$tree_revision"
+      ;;
+  esac
 )
 
 printf 'repository policy: ok\n'
