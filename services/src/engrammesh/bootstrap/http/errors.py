@@ -39,6 +39,7 @@ from engrammesh.modules.runtime.application.errors import (
 from engrammesh.modules.runtime.domain.errors import (
     ExecutionIdempotencyConflict,
     ExecutionNotFound,
+    InvalidExecutionCursor,
     InvalidExecutionTransition,
 )
 
@@ -55,6 +56,7 @@ _EXECUTION_IDEMPOTENCY_CONFLICT_MESSAGE = (
     "idempotency key conflicts with an existing execution"
 )
 _INVALID_EXECUTION_TRANSITION_MESSAGE = "execution transition is not allowed"
+_INVALID_EXECUTION_CURSOR_MESSAGE = "execution list cursor is invalid"
 _ORCHESTRATION_UNAVAILABLE_MESSAGE = "orchestration backend is unavailable"
 _AUTHENTICATION_REQUIRED_MESSAGE = "authentication is required"
 _INVALID_TOKEN_MESSAGE = "invalid token"
@@ -184,6 +186,19 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=error_envelope(
                 "invalid_episode_cursor",
                 _INVALID_EPISODE_CURSOR_MESSAGE,
+            ),
+        )
+
+    @app.exception_handler(InvalidExecutionCursor)
+    async def invalid_execution_cursor_handler(
+        _request: Request,
+        _exc: InvalidExecutionCursor,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content=error_envelope(
+                "invalid_execution_cursor",
+                _INVALID_EXECUTION_CURSOR_MESSAGE,
             ),
         )
 

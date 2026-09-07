@@ -13,12 +13,16 @@ from engrammesh.modules.runtime.adapters.postgres.migrations import (
 from engrammesh.modules.runtime.adapters.postgres.outbox_relay import (
     PostgresRuntimeOutboxRelayStore,
 )
+from engrammesh.modules.runtime.adapters.postgres.snapshot_store import (
+    PostgresExecutionSnapshotStore,
+)
 from engrammesh.modules.runtime.adapters.postgres.snapshot_writer import (
     PostgresRuntimeSnapshotWriter,
 )
 
 __all__ = [
     "MIGRATIONS_DIR",
+    "PostgresExecutionSnapshotStore",
     "PostgresRuntimeConnection",
     "PostgresRuntimeDatabase",
     "PostgresRuntimeOutboxRelayStore",

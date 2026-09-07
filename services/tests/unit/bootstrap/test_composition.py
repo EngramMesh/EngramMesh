@@ -1,6 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -17,10 +17,14 @@ from engrammesh.bootstrap.settings import (
     Environment,
     ModuleSettings,
 )
+from engrammesh.modules.memory.adapters.postgres.connection import (
+    PostgresMemoryDatabase as PostgresMemoryDatabaseType,
+)
 from engrammesh.modules.memory.application.get_episode import GetEpisodeHandler
 from engrammesh.modules.memory.application.list_episodes import ListEpisodesHandler
 from engrammesh.modules.memory.application.record_episode import RecordEpisodeHandler
 from engrammesh.modules.memory.application.relay_outbox import RelayOutboxEventsHandler
+from engrammesh.modules.runtime.application.list_executions import ListExecutionsHandler
 
 
 def _test_settings(**overrides: object) -> AppSettings:
@@ -438,3 +442,94 @@ async def test_runtime_startup_uses_in_memory_database_when_postgres_mocked() ->
             runtime_cls.assert_not_called()
         finally:
             await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_writer_not_created_for_in_memory_runtime_database() -> None:
+    settings = _test_settings(temporal={"enabled": True, "namespace": "ns", "task_queue": "q"})
+    runtime = create_runtime(settings)
+    opened: list[str] = []
+    with (
+        patch("engrammesh.bootstrap.composition.PostgresMemoryDatabase") as memory_cls,
+        patch("engrammesh.bootstrap.composition.PostgresRuntimeDatabase") as runtime_cls,
+        patch("engrammesh.bootstrap.composition.connect_temporal_client", new_callable=AsyncMock),
+        patch(
+            "engrammesh.bootstrap.composition.PostgresRuntimeSnapshotWriter.open",
+            new_callable=AsyncMock,
+            side_effect=lambda self: opened.append("open"),
+        ),
+    ):
+        memory_cls.return_value.open = AsyncMock()
+        memory_cls.return_value.close = AsyncMock()
+        runtime_cls.return_value.open = AsyncMock()
+        runtime_cls.return_value.close = AsyncMock()
+        async with runtime:
+            assert runtime._runtime_snapshot_writer is None  # type: ignore[attr-defined]
+    assert opened == []
+
+
+@pytest.mark.asyncio
+async def test_snapshot_writer_opened_and_closed_for_postgres_runtime_database() -> None:
+    settings = _test_settings(temporal={"enabled": True, "namespace": "ns", "task_queue": "q"})
+    runtime = create_runtime(settings)
+    opened: list[str] = []
+    closed: list[str] = []
+
+    async def _open(self: object) -> None:
+        opened.append("open")
+
+    async def _close(self: object) -> None:
+        closed.append("close")
+
+    with (
+        patch("engrammesh.bootstrap.composition.PostgresMemoryDatabase") as memory_cls,
+        patch(
+            "engrammesh.bootstrap.composition.PostgresRuntimeDatabase.open",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "engrammesh.bootstrap.composition.PostgresRuntimeDatabase.close",
+            new_callable=AsyncMock,
+        ),
+        patch("engrammesh.bootstrap.composition.connect_temporal_client", new_callable=AsyncMock),
+        patch(
+            "engrammesh.bootstrap.composition.PostgresRuntimeSnapshotWriter.open",
+            _open,
+        ),
+        patch(
+            "engrammesh.bootstrap.composition.PostgresRuntimeSnapshotWriter.close",
+            _close,
+        ),
+    ):
+        memory_cls.return_value = MagicMock(spec=PostgresMemoryDatabaseType)
+        memory_cls.return_value.open = AsyncMock()
+        memory_cls.return_value.close = AsyncMock()
+        async with runtime:
+            assert runtime._runtime_snapshot_writer is not None  # type: ignore[attr-defined]
+    assert opened == ["open"]
+    assert closed == ["close"]
+
+
+@pytest.mark.asyncio
+async def test_list_executions_handler_returns_cached_handler() -> None:
+    runtime = create_runtime(_test_settings())
+    with patch(
+        "engrammesh.bootstrap.composition.PostgresMemoryDatabase"
+    ) as database_cls:
+        database_cls.return_value.open = AsyncMock()
+        database_cls.return_value.close = AsyncMock()
+        await runtime.startup()
+        first = runtime.list_executions_handler()
+        second = runtime.list_executions_handler()
+        assert isinstance(first, ListExecutionsHandler)
+        assert first is second
+        await runtime.shutdown()
+
+
+def test_list_executions_handler_when_runtime_disabled_raises() -> None:
+    runtime = create_runtime(
+        _test_settings(modules=ModuleSettings(runtime_enabled=False))
+    )
+    with pytest.raises(ConfigurationError) as exc_info:
+        runtime.list_executions_handler()
+    assert exc_info.value.code == "runtime_disabled"

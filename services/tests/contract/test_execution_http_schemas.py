@@ -14,11 +14,15 @@ from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
 from engrammesh.bootstrap.http.mappers import (
+    execution_list_item_to_response,
     snapshot_to_response,
     start_result_to_response,
 )
 from engrammesh.modules.memory.public import MemoryScope
-from engrammesh.modules.runtime.application.contracts import StartExecutionResult
+from engrammesh.modules.runtime.application.contracts import (
+    ExecutionListItem,
+    StartExecutionResult,
+)
 from engrammesh.modules.runtime.domain.model import (
     ExecutionSnapshot,
     ExecutionStatus,
@@ -42,6 +46,8 @@ START_REQUEST_SCHEMA_PATH = SCHEMA_ROOT / "start-execution-request.schema.json"
 CANCEL_REQUEST_SCHEMA_PATH = SCHEMA_ROOT / "cancel-execution-request.schema.json"
 SNAPSHOT_RESPONSE_SCHEMA_PATH = SCHEMA_ROOT / "execution-snapshot-response.schema.json"
 START_RESPONSE_SCHEMA_PATH = SCHEMA_ROOT / "start-execution-response.schema.json"
+SUMMARY_RESPONSE_SCHEMA_PATH = SCHEMA_ROOT / "execution-summary-response.schema.json"
+LIST_RESPONSE_SCHEMA_PATH = SCHEMA_ROOT / "execution-list-response.schema.json"
 
 UUIDS = {
     "tenant": "53dad495-7915-439a-b03a-379452a1aa86",
@@ -192,6 +198,8 @@ def _minimal_execution_snapshot() -> ExecutionSnapshot:
         (CANCEL_REQUEST_SCHEMA_PATH, "Runtime Cancel Execution HTTP Request"),
         (SNAPSHOT_RESPONSE_SCHEMA_PATH, "Runtime Execution Snapshot HTTP Response"),
         (START_RESPONSE_SCHEMA_PATH, "Runtime Start Execution HTTP Response"),
+        (SUMMARY_RESPONSE_SCHEMA_PATH, "Runtime Execution Summary HTTP Response"),
+        (LIST_RESPONSE_SCHEMA_PATH, "Runtime Execution List HTTP Response"),
     ],
 )
 def test_schema_is_valid_draft_2020_12_with_explicit_metadata(
@@ -254,6 +262,36 @@ def test_execution_snapshot_response_schema_accepts_representative_body() -> Non
 
 def test_start_execution_response_schema_accepts_representative_body() -> None:
     _start_response_validator().validate(sample_start_execution_response_dict())
+
+
+def test_execution_list_response_matches_schema() -> None:
+    from referencing import Registry, Resource
+
+    snapshot = _minimal_execution_snapshot()
+    item = ExecutionListItem(
+        execution_id=snapshot.execution_id,
+        scope=snapshot.scope,
+        revision=snapshot.revision,
+        status=snapshot.status,
+        updated_at=snapshot.updated_at,
+    )
+    payload = {
+        "items": [execution_list_item_to_response(item).model_dump(mode="json")],
+        "next_cursor": None,
+    }
+    summary_resource = Resource.from_contents(
+        json.loads(SUMMARY_RESPONSE_SCHEMA_PATH.read_text(encoding="utf-8"))
+    )
+    registry = Registry().with_resource(
+        "https://engrammesh.org/contracts/runtime/v1/execution-summary-response.schema.json",
+        summary_resource,
+    )
+    list_schema = json.loads(LIST_RESPONSE_SCHEMA_PATH.read_text(encoding="utf-8"))
+    Draft202012Validator(
+        list_schema,
+        registry=registry,
+        format_checker=FormatChecker(),
+    ).validate(payload)
 
 
 @pytest.mark.parametrize(

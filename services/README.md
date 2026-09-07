@@ -455,12 +455,11 @@ completion, idempotent start replay, cancel, and worker-restart recovery.
 
 This slice deliberately excludes:
 
-- Execution list HTTP API (follow-up ④d)
-- Temporal → PostgreSQL snapshot projection (follow-up ④e)
 - LangGraph, PlannerPort, AgentEnginePort, full Plan DAG execution
 - Claim extraction (Phase 2)
 
-See `docs/rfcs/2026-09-07-runtime-outbox.md`,
+See `docs/rfcs/2026-09-07-execution-list-api.md`,
+`docs/rfcs/2026-09-07-runtime-outbox.md`,
 `docs/rfcs/2026-08-04-execution-snapshot-store.md`,
 `docs/rfcs/2026-07-31-temporal-runtime-adapter.md`, and
 `docs/superpowers/specs/2026-07-31-temporal-runtime-adapter-design.md`.
@@ -958,6 +957,7 @@ Read errors reuse the canonical envelope. Additional codes beyond ingest:
 | `422` | `actor_id_not_allowed` | OIDC enabled; `actor_id` supplied in query |
 | `422` | `actor_id_required` | OIDC disabled; `actor_id` missing from query |
 | `422` | `invalid_episode_cursor` | Malformed list cursor |
+| `422` | `invalid_execution_cursor` | Malformed execution list cursor |
 | `422` | `validation_error` | Invalid UUIDs, `limit` out of range (`1`–`100`) |
 | `503` | `service_unavailable` | `ConfigurationError` (for example `memory_disabled`) |
 
@@ -990,16 +990,24 @@ parameter on the next request with the same scope and `limit`.
 ## Execution HTTP API
 
 `bootstrap/http/` exposes durable execution control through
-`AppRuntime.start_execution_handler()`, `get_execution_snapshot_handler()`, and
-`cancel_execution_handler()`. Routes use `execution_auth_context` for OIDC (see
-[Authorization](#authorization)). FastAPI and uvicorn stay in bootstrap; runtime
-application handlers remain framework-neutral.
+`AppRuntime.start_execution_handler()`, `get_execution_snapshot_handler()`,
+`list_executions_handler()`, and `cancel_execution_handler()`. Routes use
+`execution_auth_context` for OIDC (see [Authorization](#authorization)). FastAPI
+and uvicorn stay in bootstrap; runtime application handlers remain
+framework-neutral.
+
+**Consistency:** `GET /executions/{id}` reads the authoritative orchestrator
+snapshot (real-time). `GET /executions` reads the PostgreSQL projection via
+`ExecutionSnapshotStore` (eventually consistent). Temporal list requires
+`PostgresRuntimeDatabase` plus `PostgresRuntimeSnapshotWriter`; `temporal.enabled`
+with `InMemoryRuntimeDatabase` does not populate the list projection.
 
 ### Endpoints
 
 | Method | Path | Success | Description |
 |--------|------|---------|-------------|
 | `POST` | `/v1/tenants/{tenant_id}/executions` | `201` or `200` | Start one execution; `201` when created, `200` on exact idempotent replay |
+| `GET` | `/v1/tenants/{tenant_id}/executions` | `200` / `403` / `422` | List execution summaries for a scope (keyset pagination) |
 | `GET` | `/v1/tenants/{tenant_id}/executions/{execution_id}` | `200` / `403` / `404` / `422` / `503` | Read one execution snapshot by exact scope |
 | `POST` | `/v1/tenants/{tenant_id}/executions/{execution_id}/cancel` | `200` / `403` / `404` / `409` / `422` / `503` | Cancel one execution |
 
@@ -1017,6 +1025,7 @@ When `memory_query` is supplied on start, its `scope` must match the execution
 |----------|--------|------|
 | `POST .../executions` | `201` | `ExecutionSnapshotResponse` + `created: true` |
 | `POST .../executions` | `200` | `ExecutionSnapshotResponse` + `created: false` (idempotent replay) |
+| `GET .../executions` | `200` | `ExecutionListResponse` (see `execution-list-response.schema.json`) |
 | `GET .../executions/{execution_id}` | `200` | `ExecutionSnapshotResponse` (see `execution-snapshot-response.schema.json`) |
 | `POST .../executions/{execution_id}/cancel` | `200` | `ExecutionSnapshotResponse` |
 

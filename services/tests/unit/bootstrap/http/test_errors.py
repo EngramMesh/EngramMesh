@@ -22,6 +22,7 @@ from engrammesh.modules.memory.domain.errors import (
     EpisodeIdempotencyConflict,
     InvalidEpisodeCursor,
 )
+from engrammesh.modules.runtime.domain.errors import InvalidExecutionCursor
 
 
 def test_error_envelope_builds_canonical_shape() -> None:
@@ -65,6 +66,10 @@ def error_app() -> FastAPI:
     @app.get("/invalid-episode-cursor")
     async def invalid_episode_cursor() -> None:
         raise InvalidEpisodeCursor()
+
+    @app.get("/invalid-execution-cursor")
+    async def invalid_execution_cursor() -> None:
+        raise InvalidExecutionCursor()
 
     @app.get("/limit-out-of-range")
     async def limit_out_of_range() -> None:
@@ -154,6 +159,20 @@ async def test_invalid_episode_cursor_maps_to_422(error_app: FastAPI) -> None:
     assert response.json() == error_envelope(
         "invalid_episode_cursor",
         "episode list cursor is invalid",
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalid_execution_cursor_maps_to_422(error_app: FastAPI) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=error_app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/invalid-execution-cursor")
+    assert response.status_code == 422
+    assert response.json() == error_envelope(
+        "invalid_execution_cursor",
+        "execution list cursor is invalid",
     )
 
 

@@ -176,6 +176,45 @@ async def test_get_execution_after_start_returns_200(
 
 
 @pytest.mark.asyncio
+async def test_start_then_list_returns_summary(client: httpx.AsyncClient) -> None:
+    start = await client.post(
+        f"/v1/tenants/{TENANT_A}/executions",
+        json=make_start_execution_payload(),
+        headers={"X-Correlation-Id": str(CORRELATION_ID)},
+    )
+    execution_id = start.json()["execution_id"]
+    listed = await client.get(
+        f"/v1/tenants/{TENANT_A}/executions",
+        params={**GET_PARAMS, "limit": 50},
+    )
+    assert listed.status_code == 200
+    item = next(
+        entry for entry in listed.json()["items"] if entry["execution_id"] == execution_id
+    )
+    assert item["status"] == "pending"
+    assert item["revision"] == 1
+
+
+@pytest.mark.asyncio
+async def test_list_invalid_cursor_returns_422(client: httpx.AsyncClient) -> None:
+    response = await client.get(
+        f"/v1/tenants/{TENANT_A}/executions",
+        params={**GET_PARAMS, "cursor": "bad"},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_execution_cursor"
+
+
+@pytest.mark.asyncio
+async def test_list_limit_over_100_returns_422(client: httpx.AsyncClient) -> None:
+    response = await client.get(
+        f"/v1/tenants/{TENANT_A}/executions",
+        params={**GET_PARAMS, "limit": 101},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_get_unknown_execution_returns_404(client: httpx.AsyncClient) -> None:
     response = await client.get(
         f"/v1/tenants/{TENANT_A}/executions/00000000-0000-4000-8000-000000000099",

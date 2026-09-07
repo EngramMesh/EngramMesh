@@ -8,6 +8,7 @@ from engrammesh.bootstrap.http.schemas import (
     CancelExecutionRequest,
     EpisodeResponse,
     ExecutionSnapshotResponse,
+    ExecutionSummaryResponse,
     FailureResponse,
     MemoryQueryRequest,
     RecordEpisodeRequest,
@@ -28,7 +29,9 @@ from engrammesh.modules.memory.domain.model import Episode, MemoryScope
 from engrammesh.modules.memory.ports import MemoryQuery
 from engrammesh.modules.runtime.application.contracts import (
     CancelExecutionCommand,
+    ExecutionListItem,
     GetExecutionSnapshotQuery,
+    ListExecutionsQuery,
     StartExecutionCommand,
     StartExecutionResult,
 )
@@ -308,6 +311,37 @@ def to_list_episodes_query(
     )
 
 
+def to_list_executions_query(
+    *,
+    path_tenant_id: TenantId,
+    actor_id: SubjectId | None = None,
+    subject_id: SubjectId,
+    workspace_id: str | None,
+    agent_id: AgentInstanceId | None,
+    limit: int,
+    cursor: str | None,
+    principal: AuthenticatedPrincipal | None = None,
+) -> ListExecutionsQuery:
+    """Map HTTP path and query parameters to a list-executions application query."""
+    if limit < 1 or limit > 100:
+        raise LimitOutOfRangeError("limit must be between 1 and 100")
+    resolved_actor_id = _resolve_actor_id(
+        principal=principal,
+        body_or_query_actor_id=actor_id.value if actor_id is not None else None,
+    )
+    return ListExecutionsQuery(
+        actor_id=resolved_actor_id,
+        scope=MemoryScope(
+            tenant_id=path_tenant_id,
+            subject_id=subject_id,
+            workspace_id=workspace_id,
+            agent_id=agent_id,
+        ),
+        limit=limit,
+        cursor=cursor,
+    )
+
+
 def to_start_execution_command(
     *,
     path_tenant_id: TenantId,
@@ -418,6 +452,28 @@ def _suspension_to_response(suspension: Suspension) -> SuspensionResponse:
         request_ref=suspension.request_ref.value,
         requested_at=suspension.requested_at,
         expires_at=suspension.expires_at,
+    )
+
+
+def execution_list_item_to_response(
+    item: ExecutionListItem,
+) -> ExecutionSummaryResponse:
+    """Map a list item to an HTTP execution summary response."""
+    return ExecutionSummaryResponse(
+        execution_id=item.execution_id.value,
+        scope=ScopeResponse(
+            tenant_id=item.scope.tenant_id.value,
+            subject_id=item.scope.subject_id.value,
+            workspace_id=item.scope.workspace_id,
+            agent_id=(
+                item.scope.agent_id.value
+                if item.scope.agent_id is not None
+                else None
+            ),
+        ),
+        revision=item.revision,
+        status=item.status,
+        updated_at=item.updated_at,
     )
 
 

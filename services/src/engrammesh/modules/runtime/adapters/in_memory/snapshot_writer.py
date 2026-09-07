@@ -15,9 +15,11 @@ class InMemoryRuntimeSnapshotWriter:
     """Collect execution snapshots with revision-monotonic upsert semantics."""
 
     snapshots: dict[ExecutionId, ExecutionSnapshot] = field(default_factory=dict)
+    upsert_history: list[ExecutionSnapshot] = field(default_factory=list)
 
     async def upsert_snapshot(self, snapshot: ExecutionSnapshot) -> None:
         existing = self.snapshots.get(snapshot.execution_id)
         if existing is not None and existing.revision >= snapshot.revision:
             return
         self.snapshots[snapshot.execution_id] = snapshot
+        self.upsert_history.append(snapshot)
