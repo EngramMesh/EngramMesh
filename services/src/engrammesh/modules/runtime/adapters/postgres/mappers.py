@@ -14,7 +14,14 @@ from engrammesh.modules.runtime.adapters.shared.snapshot_codec import (
     snapshot_to_json,
 )
 from engrammesh.modules.runtime.domain.model import ExecutionSnapshot
-from engrammesh.shared.kernel.ids import ExecutionId, TenantId
+from engrammesh.shared.kernel.events import EventEnvelope
+from engrammesh.shared.kernel.ids import (
+    CorrelationId,
+    EventId,
+    ExecutionId,
+    TenantId,
+    UUIDValue,
+)
 
 
 def snapshot_to_row(snapshot: ExecutionSnapshot) -> dict[str, object]:
@@ -69,12 +76,69 @@ def row_to_fingerprint(row: Mapping[str, object]) -> tuple[object, ...]:
     return fingerprint_from_json(cast(list[object], fingerprint_payload))
 
 
+def event_to_row(event: EventEnvelope) -> dict[str, object]:
+    """Serialize an EventEnvelope into runtime_outbox_events column values."""
+    return {
+        "event_id": event.event_id.value,
+        "event_type": event.event_type,
+        "schema_version": event.schema_version,
+        "tenant_id": event.tenant_id.value,
+        "aggregate_id": event.aggregate_id.value,
+        "aggregate_version": event.aggregate_version,
+        "correlation_id": event.correlation_id.value,
+        "causation_id": (
+            event.causation_id.value if event.causation_id is not None else None
+        ),
+        "occurred_at": event.occurred_at,
+        "payload": _to_json_value(event.payload),
+    }
+
+
+def row_to_event(row: Mapping[str, object]) -> EventEnvelope:
+    """Deserialize a runtime_outbox_events row into an EventEnvelope."""
+    causation_id = row["causation_id"]
+    payload = row["payload"]
+    if not isinstance(payload, Mapping):
+        msg = "payload must be a mapping"
+        raise TypeError(msg)
+    return EventEnvelope(
+        event_id=EventId(_as_uuid(row["event_id"])),
+        event_type=str(row["event_type"]),
+        schema_version=_as_int(row["schema_version"]),
+        tenant_id=TenantId(_as_uuid(row["tenant_id"])),
+        aggregate_id=UUIDValue(_as_uuid(row["aggregate_id"])),
+        aggregate_version=_as_int(row["aggregate_version"]),
+        correlation_id=CorrelationId(_as_uuid(row["correlation_id"])),
+        causation_id=(
+            EventId(_as_uuid(causation_id)) if causation_id is not None else None
+        ),
+        occurred_at=_as_datetime(row["occurred_at"]),
+        payload=dict(payload),
+    )
+
+
 def _as_uuid(value: object) -> UUID:
     if isinstance(value, UUID):
         return value
     if isinstance(value, str):
         return UUID(value)
     msg = f"expected UUID or UUID text, got {type(value).__name__}"
+    raise TypeError(msg)
+
+
+def _as_datetime(value: object) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    msg = f"expected datetime, got {type(value).__name__}"
+    raise TypeError(msg)
+
+
+def _as_int(value: object) -> int:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return int(value)
+    msg = f"expected int, got {type(value).__name__}"
     raise TypeError(msg)
 
 
