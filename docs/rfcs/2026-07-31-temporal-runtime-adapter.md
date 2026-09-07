@@ -28,7 +28,7 @@ This slice delivers Slice 1 (in-memory `OrchestratorPort` + application handlers
 
 ## 3. Non-goals
 
-- PostgreSQL execution snapshot store / Outbox events (Slice 4 — follow-up ④b)
+- Runtime Outbox events (follow-up ④c)
 - LangGraph, PlannerPort, AgentEnginePort, ArtifactStore
 - Full Plan DAG execution
 - Claim extraction (Phase 2 entry)

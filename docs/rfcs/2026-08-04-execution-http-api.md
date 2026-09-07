@@ -23,8 +23,7 @@ staging/production traffic until OIDC is extended to runtime actions.
 
 ## 3. Non-goals
 
-Execution list API, PostgreSQL execution store (Slice 4), SSE streaming, runtime
-Outbox events, handler semantic changes.
+Execution list API, SSE streaming, runtime Outbox events, handler semantic changes.
 
 ## 4. API summary
 
@@ -74,6 +73,6 @@ See spec §10.
 ③ OIDC tenant context                            ✅
 ④ Temporal runtime adapter                       ✅
    ④a Execution HTTP API + OIDC runtime auth      ✅
-   ④b Execution snapshot store (PostgreSQL)      ← Slice 4
+   ④b Execution snapshot store (PostgreSQL)      ✅
 ⑤ Claim extraction processor                     ← Phase 2 entry
 ```
