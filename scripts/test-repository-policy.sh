@@ -1928,7 +1928,7 @@ scripts/check-repository-policy.sh
     docs/superpowers/probe \
     docs/plans/probe
   do
-    git -C "$baseline_root" check-ignore -- "$ignored_path" >/dev/null 2>&1 ||
+    git -C "$baseline_root" check-ignore --no-index -- "$ignored_path" >/dev/null 2>&1 ||
       fail "baseline fixture does not ignore local artifact path: $ignored_path"
   done
 
