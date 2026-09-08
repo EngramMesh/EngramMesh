@@ -135,6 +135,14 @@ class ClaimStore(Protocol):
         claim_id: MemoryId,
     ) -> tuple[Claim, ...]: ...
 
+    async def stream(
+        self,
+        scope: MemoryScope,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> tuple[Claim, ...]: ...
+
 
 @runtime_checkable
 class CandidateIndex(Protocol):

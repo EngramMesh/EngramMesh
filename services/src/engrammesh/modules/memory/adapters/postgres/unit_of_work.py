@@ -22,6 +22,7 @@ from engrammesh.modules.memory.adapters.postgres.mappers import (
     row_to_claim,
     row_to_episode,
 )
+from engrammesh.modules.memory.domain.claim_cursor import decode_claim_cursor
 from engrammesh.modules.memory.domain.episode_cursor import decode_episode_cursor
 from engrammesh.modules.memory.domain.errors import (
     ClaimsUnavailable,
@@ -441,6 +442,53 @@ class _PostgresClaimStore:
                 params,
             )
             rows = await cursor.fetchall()
+        return tuple(row_to_claim(row) for row in rows)
+
+    async def stream(
+        self,
+        scope: MemoryScope,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> tuple[Claim, ...]:
+        self._state.require_usable()
+        if cursor is not None and limit is None:
+            msg = "cursor requires limit"
+            raise ValueError(msg)
+        if limit is not None and limit <= 0:
+            msg = "limit must be positive"
+            raise ValueError(msg)
+        params = _scope_params(scope)
+        cursor_clause = ""
+        if cursor is not None:
+            cursor_at, cursor_id = decode_claim_cursor(cursor)
+            params["cursor_recorded_from"] = cursor_at
+            params["cursor_claim_id"] = cursor_id.value
+            cursor_clause = """
+              AND (recorded_from, claim_id) < (%(cursor_recorded_from)s, %(cursor_claim_id)s)
+            """
+        limit_clause = ""
+        if limit is not None:
+            params["limit"] = limit
+            limit_clause = "LIMIT %(limit)s"
+        async with self._state.connection.cursor(row_factory=dict_row) as cursor_:
+            await cursor_.execute(
+                f"""
+                SELECT {", ".join(_CLAIM_COLUMNS)}
+                FROM memory_claim_proposals
+                WHERE tenant_id = %(tenant_id)s
+                  AND subject_id = %(subject_id)s
+                  AND workspace_id IS NOT DISTINCT FROM %(workspace_id)s
+                  AND agent_id IS NOT DISTINCT FROM %(agent_id)s
+                  AND status = 'proposed'
+                  AND recorded_to IS NULL
+                  {cursor_clause}
+                ORDER BY recorded_from DESC, claim_id DESC
+                {limit_clause}
+                """,
+                params,
+            )
+            rows = await cursor_.fetchall()
         return tuple(row_to_claim(row) for row in rows)
 
 
