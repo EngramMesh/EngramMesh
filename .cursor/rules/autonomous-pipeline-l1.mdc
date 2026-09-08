@@ -5,6 +5,8 @@ alwaysApply: false
 
 # L1 Semi-Autonomous Pipeline
 
+**Activation:** If `.superpowers/pipeline-state.json` exists and `phase` is not `select_feature`, this rule is **mandatory** for the entire session.
+
 Use when the user starts a feature cycle with the L1 kickoff prompt or asks to run the dev pipeline.
 
 ## Human gates (L1 only)
@@ -82,12 +84,27 @@ For `N` from `next_task` to `total_tasks`:
 1. Record `task_base_commits[N]` = current `HEAD`.
 2. Extract **only** Task N from the plan (do not pass the full plan to implementer).
 3. Dispatch implementer subagent (`model: inherit`) with task brief only.
-4. Run `review-package` from `task_base_commits[N]` to `HEAD`.
-5. Dispatch task reviewer subagent (`model: inherit`) — require **both** spec compliance ✅ and quality ✅.
-6. On failure: fix subagent → re-review. Do not increment `N`.
-7. On pass:
-   - Append to `progress.md`: `Task N: complete (commits <base7>..<head7>, review clean)`
+4. **Task N must end with its own `git commit`** (per plan Step 5) before review.
+5. Run `review-package` from `task_base_commits[N]` to `HEAD`.
+6. Dispatch task reviewer subagent (`model: inherit`) — require **both** spec compliance ✅ and quality ✅.
+7. On failure: fix subagent → re-review. Do not increment `N`.
+8. On pass:
+   - Append **exactly one** line to `progress.md`:
+     `Task N: complete (commits <base7>..<head7>, review clean)`
+     where `<head7>` is the **unique** commit produced for Task N (never `HEAD`, never shared with another task).
    - Add `N` to `completed_tasks`, set `next_task = N + 1`
+9. **Stop after one task** — do not start Task N+1 in the same turn unless explicitly resuming a stalled pipeline.
+
+### Mechanical gate (required)
+
+Before setting `phase: branch_review` or running `gh pr create`:
+
+```bash
+scripts/check-l1-implementing-gate.sh --exit-implementing
+```
+
+Exit code **must be 0**. If it fails, stay in `implementing` and resume at `next_task`.
+A Cursor hook also blocks `gh pr create` while `phase == implementing` and this check fails.
 
 ### Exit `implementing` ONLY when ALL are true
 
@@ -100,10 +117,15 @@ progress.md contains exactly total_tasks lines matching "Task N: complete"
 Run this self-check before setting `phase: branch_review`:
 
 ```bash
-# Example: plan has 7 tasks
+scripts/check-l1-implementing-gate.sh --exit-implementing
+```
+
+Also verify manually:
+
+```bash
 grep -cE '^### Task ' "$PLAN_PATH"
 grep -cE '^Task [0-9]+: complete \(commits ' .superpowers/sdd/progress.md
-# counts MUST match; progress lines must not include qualifiers like "review NOT run"
+# counts MUST match; each line must have a distinct head sha
 ```
 
 If counts differ → **stay in `implementing`**, resume at `next_task`.
@@ -115,6 +137,9 @@ If counts differ → **stay in `implementing`**, resume at `next_task`.
 - Declaring "implementation complete" or "all tasks done" after fewer than `total_tasks` reviewer approvals
 - Dispatching one implementer for multiple plan tasks in a single pass (unless plan has only one task)
 - Skipping task reviewer because "code looks complete"
+- **Backfilling** multiple `Task N: complete` lines in one turn or with the **same head commit**
+- Using `..HEAD` instead of a concrete `<head7>` sha in progress lines
+- Marking tasks 2–N complete without a separate implementer + reviewer cycle for each
 
 ## Feature selection (deterministic)
 

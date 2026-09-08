@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": ".cursor/hooks/l1-pipeline-session-context.sh"
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": ".cursor/hooks/block-premature-l1-pr.sh",
+        "matcher": "gh pr create",
+        "failClosed": false
+      }
+    ]
+  }
+}
