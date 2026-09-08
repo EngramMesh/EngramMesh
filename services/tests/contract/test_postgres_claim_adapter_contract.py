@@ -1,4 +1,4 @@
-"""Bind PostgreSQL episode capability contracts for claims and cursors."""
+"""Bind PostgreSQL claim adapter contracts."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ import psycopg
 import pytest
 import pytest_asyncio
 from memory_adapter_contract import (
+    CLAIM_ADAPTER_CONTRACTS,
     MemoryAdapterContractAssertion,
     MemoryAdapterHarnessFactory,
-    assert_cursor_pagination_is_stable,
 )
 from test_postgres_memory_adapter_contract import PostgresMemoryAdapterHarness
 
@@ -19,13 +19,6 @@ from engrammesh.modules.memory.adapters.postgres.connection import (
 )
 
 pytestmark = pytest.mark.postgres
-
-POSTGRES_EPISODE_CAPABILITY_CONTRACTS: tuple[
-    tuple[str, MemoryAdapterContractAssertion],
-    ...,
-] = (
-    ("cursor_pagination", assert_cursor_pagination_is_stable),
-)
 
 
 @pytest_asyncio.fixture
@@ -56,10 +49,10 @@ def harness_factory(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("case_name", "assert_contract"),
-    POSTGRES_EPISODE_CAPABILITY_CONTRACTS,
-    ids=[case_name for case_name, _ in POSTGRES_EPISODE_CAPABILITY_CONTRACTS],
+    CLAIM_ADAPTER_CONTRACTS,
+    ids=[case_name for case_name, _ in CLAIM_ADAPTER_CONTRACTS],
 )
-async def test_postgres_episode_capability_contract(
+async def test_postgres_claim_adapter_contract(
     case_name: str,
     assert_contract: MemoryAdapterContractAssertion,
     harness_factory: MemoryAdapterHarnessFactory,

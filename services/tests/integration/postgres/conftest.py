@@ -17,6 +17,7 @@ from engrammesh.modules.runtime.adapters.postgres.migrations import (
 POSTGRES_DSN_ENV = "ENGRAMMESH__POSTGRES__DSN"
 
 _DATA_TABLES = (
+    "memory_claim_proposals",
     "memory_inbox_events",
     "memory_outbox_events",
     "memory_episode_idempotency",

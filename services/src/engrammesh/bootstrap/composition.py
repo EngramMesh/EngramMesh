@@ -18,6 +18,9 @@ from engrammesh.bootstrap.infrastructure import (
     create_token_verifier,
 )
 from engrammesh.bootstrap.settings import AppSettings, ConfigurationError
+from engrammesh.modules.memory.adapters.deterministic.extractor import (
+    DeterministicMemoryExtractor,
+)
 from engrammesh.modules.memory.adapters.postgres import (
     PostgresInboxStore,
     PostgresMemoryDatabase,
@@ -33,6 +36,9 @@ from engrammesh.modules.memory.application.contracts import (
 )
 from engrammesh.modules.memory.application.episode_recorded_processor import (
     EpisodeRecordedProcessor,
+)
+from engrammesh.modules.memory.application.extract_claims_from_episode import (
+    ExtractClaimsFromEpisodeHandler,
 )
 from engrammesh.modules.memory.application.get_episode import GetEpisodeHandler
 from engrammesh.modules.memory.application.list_episodes import ListEpisodesHandler
@@ -304,9 +310,26 @@ class AppRuntime:
             msg = "application runtime is not started"
             raise RuntimeError(msg)
         if self._inbox_handler is None:
+            unit_of_work_factory = self._unit_of_work_factory
+            if unit_of_work_factory is None:
+                msg = "memory unit of work factory is not configured"
+                raise RuntimeError(msg)
             self._inbox_handler = ProcessInboxEventHandler(
                 store=PostgresInboxStore(self._database),
-                processors=(EpisodeRecordedProcessor(),),
+                processors=(
+                    EpisodeRecordedProcessor(
+                        extraction=ExtractClaimsFromEpisodeHandler(
+                            unit_of_work_factory=unit_of_work_factory,
+                            extractor=DeterministicMemoryExtractor(
+                                extractor_version=(
+                                    self._settings.claim_extraction.extractor_version
+                                ),
+                            ),
+                            identities=UuidMemoryIdentityPort(),
+                            enabled=self._settings.claim_extraction.enabled,
+                        ),
+                    ),
+                ),
                 consumer_name=self._settings.inbox.consumer_name,
                 clock=SystemUtcClock(),
             )

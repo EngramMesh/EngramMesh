@@ -419,7 +419,7 @@ HTTP 服务**不会**自动启动运行时中继循环（与 memory Outbox Relay
 
 ## Inbox 消费者
 
-当 `inbox.enabled` 为 `True`（默认）时，中继分发经 `InboxOutboxEventPublisher` 流转：先执行 Inbox 处理，再调用日志委托。`ProcessInboxEventHandler` 将受支持的事件路由到可插拔 Processor；v1 注册 `EpisodeRecordedProcessor` 对 `memory.episode-recorded` 做结构不变量校验（无投影副作用）。
+当 `inbox.enabled` 为 `True`（默认）时，中继分发经 `InboxOutboxEventPublisher` 流转：先执行 Inbox 处理，再调用日志委托。`ProcessInboxEventHandler` 将受支持的事件路由到可插拔 Processor；v1 注册 `EpisodeRecordedProcessor` 对 `memory.episode-recorded` 做结构不变量校验，并通过确定性提取器持久化 Claim 提案（Phase 2 入口切片）。
 
 ```text
 RelayOutboxEventsHandler
@@ -428,10 +428,33 @@ RelayOutboxEventsHandler
           → 按 event_type 选择 InboxEventProcessor
           → InboxStore.try_record(event_id, ...)
           → EpisodeRecordedProcessor.process(event)
+              → 结构校验
+              → ExtractClaimsFromEpisodeHandler.handle(event)
+                  → DeterministicMemoryExtractor.propose(episode)
+                  → PostgresClaimStore.add_proposal(...)
           → 失败时：InboxStore.remove_record(event_id)
       → LoggingOutboxEventPublisher.publish(event)   # 仅测试可见性
   → OutboxRelayStore.mark_published(...)
 ```
+
+迁移 `004_claim_proposals.sql` 创建 `memory_claim_proposals`，并通过 `UNIQUE (tenant_id, episode_id, extractor_version)` 保证幂等。
+
+### Claim 提取配置
+
+```python
+class ClaimExtractionSettings:
+    enabled: bool = True
+    extractor_version: str = "deterministic-v1"
+```
+
+| 环境变量 | 默认值 |
+|---------|--------|
+| `ENGRAMMESH__CLAIM_EXTRACTION__ENABLED` | `true` |
+| `ENGRAMMESH__CLAIM_EXTRACTION__EXTRACTOR_VERSION` | `deterministic-v1` |
+
+当 `claim_extraction.enabled=false` 时，仅执行 Inbox 校验，不持久化 Claim。提取依赖 `inbox.enabled=true`（中继须到达 Inbox Processor）。
+
+**非目标（本切片）：** LLM 或提示词提取；拉取 Artifact 内容；Claim 读 HTTP API；语义搜索或向量/图投影；实体解析或准入工作流；`memory.claim-proposed` Outbox 事件；`runtime.execution-status-changed` 的 Runtime Inbox；Kafka 或 Inbox 表结构变更；修改 `RecordEpisodeHandler` 或 Episode 写入 HTTP 语义。
 
 **委托与 Inbox 权威：** `InboxOutboxEventPublisher` 在 Inbox 处理后始终调用日志委托，包括 Handler 返回 `skipped=True`（重复或不支持的事件）时。测试中断言分发可见性请用 `logging_outbox_event_publisher.published`；已处理权威请查 `memory_inbox_events` 行数。`LoggingOutboxEventPublisher.published` **不是**去重权威来源。
 

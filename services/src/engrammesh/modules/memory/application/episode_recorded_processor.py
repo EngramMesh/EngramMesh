@@ -3,6 +3,9 @@
 from collections.abc import Mapping
 from typing import final
 
+from engrammesh.modules.memory.application.extract_claims_from_episode import (
+    ExtractClaimsFromEpisodeHandler,
+)
 from engrammesh.shared.kernel.events import EventEnvelope
 
 _EPISODE_RECORDED = "memory.episode-recorded"
@@ -25,6 +28,13 @@ _REQUIRED_SCOPE_FIELDS = ("subject_id",)
 
 @final
 class EpisodeRecordedProcessor:
+    def __init__(
+        self,
+        *,
+        extraction: ExtractClaimsFromEpisodeHandler,
+    ) -> None:
+        self._extraction = extraction
+
     def supports(self, event_type: str) -> bool:
         return event_type == _EPISODE_RECORDED
 
@@ -54,3 +64,4 @@ class EpisodeRecordedProcessor:
             if field not in scope:
                 msg = f"payload.scope missing required field {field!r}"
                 raise ValueError(msg)
+        await self._extraction.handle(event)

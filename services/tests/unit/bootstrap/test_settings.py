@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from engrammesh.bootstrap.settings import (
     AppSettings,
+    ClaimExtractionSettings,
     ConfigurationError,
     Environment,
     HttpSettings,
@@ -28,6 +29,7 @@ EXPECTED_MODEL_FIELDS: Mapping[type[object], tuple[str, ...]] = {
     OutboxRelaySettings: ("enabled", "batch_size", "poll_interval_seconds"),
     RuntimeOutboxRelaySettings: ("enabled", "batch_size", "poll_interval_seconds"),
     InboxSettings: ("enabled", "consumer_name"),
+    ClaimExtractionSettings: ("enabled", "extractor_version"),
     OidcSettings: (
         "enabled",
         "issuer",
@@ -46,6 +48,7 @@ EXPECTED_MODEL_FIELDS: Mapping[type[object], tuple[str, ...]] = {
         "modules",
         "http",
         "inbox",
+        "claim_extraction",
         "outbox_relay",
         "runtime_outbox_relay",
         "oidc",

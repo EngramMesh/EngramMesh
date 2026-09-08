@@ -8,7 +8,11 @@ from typing import Any
 from uuid import UUID
 
 from engrammesh.modules.memory.domain.model import (
+    Claim,
+    ClaimStatus,
     Episode,
+    EpistemicKind,
+    EvidenceRef,
     MemoryScope,
     RetentionClass,
     Sensitivity,
@@ -136,6 +140,95 @@ def row_to_event(row: Mapping[str, object]) -> EventEnvelope:
     )
 
 
+def claim_to_row(claim: Claim, *, episode_id: MemoryId) -> dict[str, object]:
+    """Serialize a Claim into memory_claim_proposals column values."""
+    evidence = claim.evidence[0]
+    return {
+        "tenant_id": claim.scope.tenant_id.value,
+        "claim_id": claim.id.value,
+        "episode_id": episode_id.value,
+        "subject_id": claim.scope.subject_id.value,
+        "workspace_id": claim.scope.workspace_id,
+        "agent_id": (
+            claim.scope.agent_id.value
+            if claim.scope.agent_id is not None
+            else None
+        ),
+        "subject": claim.subject,
+        "predicate": claim.predicate,
+        "object_value": claim.object_value,
+        "polarity": claim.polarity,
+        "epistemic_kind": claim.epistemic_kind.value,
+        "confidence": claim.confidence,
+        "valid_from": claim.valid_from,
+        "valid_to": claim.valid_to,
+        "recorded_from": claim.recorded_from,
+        "recorded_to": claim.recorded_to,
+        "status": claim.status.value,
+        "evidence": [
+            {
+                "episode_id": str(item.episode_id.value),
+                "source_span": item.source_span,
+                "extractor_version": item.extractor_version,
+                "model_ref": item.model_ref,
+                "prompt_version": item.prompt_version,
+            }
+            for item in claim.evidence
+        ],
+        "extractor_version": evidence.extractor_version,
+    }
+
+
+def row_to_claim(row: Mapping[str, object]) -> Claim:
+    """Deserialize a memory_claim_proposals row into a Claim."""
+    evidence_raw = row["evidence"]
+    if not isinstance(evidence_raw, list):
+        msg = "evidence must be a list"
+        raise TypeError(msg)
+    evidence = tuple(
+        EvidenceRef(
+            episode_id=MemoryId(_as_uuid(item["episode_id"])),
+            source_span=str(item["source_span"]),
+            extractor_version=str(item["extractor_version"]),
+            model_ref=_optional_text(item.get("model_ref")),
+            prompt_version=_optional_text(item.get("prompt_version")),
+        )
+        for item in evidence_raw
+    )
+    agent_id = row["agent_id"]
+    return Claim(
+        id=MemoryId(_as_uuid(row["claim_id"])),
+        scope=MemoryScope(
+            tenant_id=TenantId(_as_uuid(row["tenant_id"])),
+            subject_id=SubjectId(_as_uuid(row["subject_id"])),
+            workspace_id=_optional_text(row["workspace_id"]),
+            agent_id=(
+                AgentInstanceId(_as_uuid(agent_id))
+                if agent_id is not None
+                else None
+            ),
+        ),
+        subject=str(row["subject"]),
+        predicate=str(row["predicate"]),
+        object_value=str(row["object_value"]),
+        polarity=bool(row["polarity"]),
+        epistemic_kind=EpistemicKind(str(row["epistemic_kind"])),
+        confidence=_as_float(row["confidence"]),
+        valid_from=_as_datetime(row["valid_from"]),
+        valid_to=(
+            _as_datetime(row["valid_to"]) if row["valid_to"] is not None else None
+        ),
+        recorded_from=_as_datetime(row["recorded_from"]),
+        recorded_to=(
+            _as_datetime(row["recorded_to"])
+            if row["recorded_to"] is not None
+            else None
+        ),
+        status=ClaimStatus(str(row["status"])),
+        evidence=evidence,
+    )
+
+
 def episode_request_fingerprint(episode: Episode) -> EpisodeRequestFingerprint:
     """Return Episode-defining fields used for idempotency replay comparison."""
     return (
@@ -197,6 +290,17 @@ def _as_int(value: object) -> int:
     if isinstance(value, str):
         return int(value)
     msg = f"expected int, got {type(value).__name__}"
+    raise TypeError(msg)
+
+
+def _as_float(value: object) -> float:
+    if isinstance(value, float):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return float(value)
+    if isinstance(value, str):
+        return float(value)
+    msg = f"expected float, got {type(value).__name__}"
     raise TypeError(msg)
 
 
