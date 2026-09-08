@@ -13,6 +13,7 @@ from engrammesh.modules.memory.adapters import (
     InMemoryMemoryUnitOfWorkFactory,
 )
 from engrammesh.modules.memory.domain.episode_cursor import encode_episode_cursor
+from engrammesh.modules.memory.domain.errors import ClaimsUnavailable
 from engrammesh.modules.memory.domain.model import (
     Episode,
     MemoryScope,
@@ -355,21 +356,14 @@ async def test_claim_store_is_explicitly_unavailable() -> None:
 
     async with factory.create() as unit_of_work:
         claims = unit_of_work.claims
-        with pytest.raises(
-            NotImplementedError,
-            match="in-memory claim store is unavailable",
-        ):
+        with pytest.raises(ClaimsUnavailable):
             await claims.add_proposal(cast(ClaimProposal, object()))
-        with pytest.raises(
-            NotImplementedError,
-            match="in-memory claim store is unavailable",
-        ):
+        with pytest.raises(ClaimsUnavailable):
             await claims.current(cast(MemoryQuery, object()))
-        with pytest.raises(
-            NotImplementedError,
-            match="in-memory claim store is unavailable",
-        ):
+        with pytest.raises(ClaimsUnavailable):
             await claims.history(make_scope(), memory_id(1))
+        with pytest.raises(ClaimsUnavailable):
+            await claims.stream(make_scope())
 
 
 @pytest.mark.asyncio

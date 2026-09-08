@@ -17,7 +17,10 @@ from uuid import UUID
 import pytest
 
 from engrammesh.modules.memory.domain.episode_cursor import encode_episode_cursor
-from engrammesh.modules.memory.domain.errors import EpisodeIdempotencyConflict
+from engrammesh.modules.memory.domain.errors import (
+    ClaimsUnavailable,
+    EpisodeIdempotencyConflict,
+)
 from engrammesh.modules.memory.domain.model import (
     Claim,
     ClaimStatus,
@@ -576,14 +579,16 @@ async def assert_claim_operations_are_unavailable(
     harness = make_harness()
 
     async with harness.unit_of_work_factory.create() as unit_of_work:
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(ClaimsUnavailable):
             await unit_of_work.claims.add_proposal(
                 cast(ClaimProposal, object())
             )
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(ClaimsUnavailable):
             await unit_of_work.claims.current(cast(MemoryQuery, object()))
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(ClaimsUnavailable):
             await unit_of_work.claims.history(make_scope(), memory_id(1))
+        with pytest.raises(ClaimsUnavailable):
+            await unit_of_work.claims.stream(make_scope())
 
 
 def make_claim_proposal(
