@@ -8,7 +8,10 @@ from engrammesh.modules.memory.adapters.in_memory.database import (
     _CommittedMemoryState,
 )
 from engrammesh.modules.memory.domain.episode_cursor import decode_episode_cursor
-from engrammesh.modules.memory.domain.errors import EpisodeIdempotencyConflict
+from engrammesh.modules.memory.domain.errors import (
+    ClaimsUnavailable,
+    EpisodeIdempotencyConflict,
+)
 from engrammesh.modules.memory.domain.model import Claim, Episode, MemoryScope
 from engrammesh.modules.memory.ports import (
     AddProposalResult,
@@ -26,7 +29,6 @@ from engrammesh.shared.kernel.ids import MemoryId
 _NOT_ACTIVE = "memory transaction is not active"
 _ALREADY_ENTERED = "memory transaction cannot be entered more than once"
 _ALREADY_COMMITTED = "memory transaction has already been committed"
-_CLAIMS_UNAVAILABLE = "in-memory claim store is unavailable"
 _EPISODE_RECORDED = "memory.episode-recorded"
 _EVENT_AGGREGATE_UNKNOWN = "outbox episode event aggregate is unknown"
 _EVENT_TENANT_MISMATCH = "outbox event tenant does not match episode tenant"
@@ -152,11 +154,13 @@ class _UnavailableClaimStore:
 
     async def add_proposal(self, proposal: ClaimProposal) -> AddProposalResult:
         self._state.require_usable()
-        raise NotImplementedError(_CLAIMS_UNAVAILABLE)
+        del proposal
+        raise ClaimsUnavailable()
 
     async def current(self, query: MemoryQuery) -> tuple[Claim, ...]:
         self._state.require_usable()
-        raise NotImplementedError(_CLAIMS_UNAVAILABLE)
+        del query
+        raise ClaimsUnavailable()
 
     async def history(
         self,
@@ -164,7 +168,19 @@ class _UnavailableClaimStore:
         claim_id: MemoryId,
     ) -> tuple[Claim, ...]:
         self._state.require_usable()
-        raise NotImplementedError(_CLAIMS_UNAVAILABLE)
+        del scope, claim_id
+        raise ClaimsUnavailable()
+
+    async def stream(
+        self,
+        scope: MemoryScope,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> tuple[Claim, ...]:
+        self._state.require_usable()
+        del scope, limit, cursor
+        raise ClaimsUnavailable()
 
 
 @final

@@ -17,3 +17,19 @@ class InvalidEpisodeCursor(ValueError):
 
     def __init__(self) -> None:
         super().__init__()
+
+
+@final
+class InvalidClaimCursor(ValueError):
+    """Raised when a claim list cursor cannot be decoded."""
+
+    def __init__(self) -> None:
+        super().__init__()
+
+
+@final
+class ClaimsUnavailable(RuntimeError):
+    """Raised when claim store operations are not supported by the adapter."""
+
+    def __init__(self) -> None:
+        super().__init__()
