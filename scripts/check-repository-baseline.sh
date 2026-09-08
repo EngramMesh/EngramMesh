@@ -241,7 +241,7 @@ for ignored_path in \
   docs/superpowers/probe \
   docs/plans/probe
 do
-  if ! git check-ignore -- "$ignored_path" >/dev/null 2>&1; then
+  if ! git check-ignore --no-index -- "$ignored_path" >/dev/null 2>&1; then
     if [ -n "${POLICY_BASE_SHA:-}" ] &&
       base_revision=$(git rev-parse --verify "$POLICY_BASE_SHA^{commit}" 2>/dev/null) &&
       git ls-tree -r --name-only "$base_revision" -- "$ignored_path" |
