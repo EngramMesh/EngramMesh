@@ -122,7 +122,7 @@ async def test_composed_runtime_records_and_relays_episode_event(
 
 @pytest.mark.postgres
 @pytest.mark.asyncio
-async def test_replay_ingest_then_relay_publishes_nothing(
+async def test_replay_ingest_then_second_relay_publishes_claim_proposed(
     postgres_dsn: str,
     postgres_connection: psycopg.Connection,
 ) -> None:
@@ -143,9 +143,10 @@ async def test_replay_ingest_then_relay_publishes_nothing(
         second_relay = await runtime.relay_outbox_once()
 
         assert first_relay.published == 1
-        assert second_relay.fetched == 0
-        assert second_relay.published == 0
-        assert len(publisher.published) == publisher_length
+        assert second_relay.fetched == 1
+        assert second_relay.published == 1
+        assert len(publisher.published) == publisher_length + 1
+        assert publisher.published[-1].event_type == "memory.claim-proposed"
 
 
 @pytest.mark.postgres

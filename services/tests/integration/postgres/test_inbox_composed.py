@@ -109,9 +109,9 @@ async def test_relay_retry_after_publish_failure_dedupes_inbox(
 
         retry_result = await runtime.relay_outbox_once()
 
-    assert retry_result.fetched == 1
-    assert retry_result.dispatched == 1
-    assert retry_result.published == 1
+    assert retry_result.fetched == 2
+    assert retry_result.dispatched == 2
+    assert retry_result.published == 2
     assert count_inbox_events(postgres_connection) == 1
 
 

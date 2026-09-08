@@ -598,6 +598,7 @@ RelayOutboxEventsHandler
               → ExtractClaimsFromEpisodeHandler.handle(event)
                   → DeterministicMemoryExtractor.propose(episode)
                   → PostgresClaimStore.add_proposal(...)
+                  → when created: OutboxPort.publish(memory.claim-proposed)
           → on failure: InboxStore.remove_record(event_id)
       → LoggingOutboxEventPublisher.publish(event)   # test visibility only
   → OutboxRelayStore.mark_published(...)
@@ -623,11 +624,21 @@ When `claim_extraction.enabled=false`, inbox validation runs without persisting
 claims. Extraction requires `inbox.enabled=true` (relay must reach the inbox
 processor).
 
-**Non-goals (this slice):** LLM or prompt-based extraction; artifact content
+### memory.claim-proposed outbox events
+
+When claim extraction persists a **new** proposal (`AddProposalResult.created`),
+`ExtractClaimsFromEpisodeHandler` publishes `memory.claim-proposed` in the same
+unit of work. Idempotent replays (`created=False`) skip outbox publication.
+Contract: `packages/contracts/jsonschema/memory/v1/claim-proposed.schema.json`.
+
+**Non-goals (claim extraction slice):** LLM or prompt-based extraction; artifact content
 fetch; claim read HTTP APIs; semantic search or vector/graph projections;
-entity resolution or admission workflows; `memory.claim-proposed` outbox events;
-runtime inbox for `runtime.execution-status-changed`; Kafka or inbox schema
+entity resolution or admission workflows; runtime inbox for
+`runtime.execution-status-changed`; Kafka or inbox schema
 changes; changes to `RecordEpisodeHandler` or episode ingest HTTP semantics.
+
+**Non-goals (claim-proposed outbox slice):** downstream consumers of
+`memory.claim-proposed`; claim read HTTP API; LLM extraction.
 
 **Delegate vs inbox authority:** `InboxOutboxEventPublisher` always calls the
 logging delegate after inbox handling, including when the handler returns

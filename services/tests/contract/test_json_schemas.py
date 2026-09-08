@@ -28,6 +28,7 @@ SCHEMA_ROOT = REPOSITORY_ROOT / "packages" / "contracts" / "jsonschema"
 SCHEMA_PATHS = {
     "envelope": SCHEMA_ROOT / "events" / "v1" / "event-envelope.schema.json",
     "episode": SCHEMA_ROOT / "memory" / "v1" / "episode-recorded.schema.json",
+    "claim-proposed": SCHEMA_ROOT / "memory" / "v1" / "claim-proposed.schema.json",
     "execution": (
         SCHEMA_ROOT
         / "runtime"
@@ -45,6 +46,7 @@ UUIDS = {
     "subject": "d87fdc29-d07d-4714-adc4-ef5eb64c6dbe",
     "actor": "5dfc0971-12d9-4743-be3a-385758ac86bb",
     "content": "502700f1-5e63-4770-a259-245925c80c4f",
+    "claim": "c152cf23-404b-448a-8643-e991729a8f84",
     "execution": "0ee41388-bc30-4477-b6fe-e9e16e731f5f",
 }
 
@@ -99,6 +101,39 @@ def _episode_event() -> dict[str, object]:
     )
 
 
+def _claim_proposed_event() -> dict[str, object]:
+    return _envelope(
+        "memory.claim-proposed",
+        {
+            "claim_id": UUIDS["claim"],
+            "episode_id": UUIDS["episode"],
+            "scope": {
+                "subject_id": UUIDS["subject"],
+                "workspace_id": "workspace-42",
+                "agent_id": None,
+            },
+            "subject": UUIDS["subject"],
+            "predicate": "observed_content_hash",
+            "object_value": "sha256:88c7355c",
+            "polarity": True,
+            "epistemic_kind": "extracted",
+            "confidence": 1.0,
+            "valid_from": "2026-07-27T08:29:58+00:00",
+            "valid_to": None,
+            "recorded_from": "2026-07-27T08:30:00Z",
+            "status": "proposed",
+            "extractor_version": "deterministic-v1",
+            "evidence": [
+                {
+                    "episode_id": UUIDS["episode"],
+                    "source_span": "metadata",
+                    "extractor_version": "deterministic-v1",
+                }
+            ],
+        },
+    )
+
+
 def _execution_event() -> dict[str, object]:
     return _envelope(
         "runtime.execution-status-changed",
@@ -132,6 +167,7 @@ def test_schema_is_valid_draft_2020_12_with_explicit_metadata(
     [
         ("envelope", _envelope("architecture.contract-tested", {})),
         ("episode", _episode_event()),
+        ("claim-proposed", _claim_proposed_event()),
         ("execution", _execution_event()),
     ],
 )
@@ -162,6 +198,7 @@ def test_schema_accepts_a_representative_valid_event(
             ("aggregate_version",),
         ),
         ("episode", _episode_event, ("payload", "scope")),
+        ("claim-proposed", _claim_proposed_event, ("payload", "claim_id")),
         ("execution", _execution_event, ("payload", "revision")),
     ],
 )
@@ -192,6 +229,7 @@ def test_schema_rejects_missing_required_contract_fields(
             "not-a-timestamp",
         ),
         ("episode", _episode_event(), ("payload", "scope", "subject_id"), "not-a-uuid"),
+        ("claim-proposed", _claim_proposed_event(), ("payload", "confidence"), 1.5),
         ("execution", _execution_event(), ("payload", "revision"), 0),
     ],
 )

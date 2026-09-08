@@ -37,20 +37,62 @@ def make_settings_claim_extraction_disabled(postgres_dsn: str) -> AppSettings:
     )
 
 
+def count_claim_proposed_outbox_events(connection: psycopg.Connection) -> int:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM memory_outbox_events
+            WHERE event_type = 'memory.claim-proposed'
+            """
+        )
+        row = cursor.fetchone()
+        assert row is not None
+        return row[0]
+
+
+def count_unpublished_claim_proposed_outbox_events(
+    connection: psycopg.Connection,
+) -> int:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM memory_outbox_events
+            WHERE event_type = 'memory.claim-proposed'
+              AND published_at IS NULL
+            """
+        )
+        row = cursor.fetchone()
+        assert row is not None
+        return row[0]
+
+
 @pytest.mark.postgres
 @pytest.mark.asyncio
-async def test_record_relay_inbox_persists_claim_proposal(
+async def test_record_relay_inbox_persists_claim_proposal_and_outbox_event(
     postgres_dsn: str,
     postgres_connection: psycopg.Connection,
 ) -> None:
     settings = make_settings(postgres_dsn)
-    command = make_command(idempotency_key="claim-extraction-first")
+    command = make_command(idempotency_key="claim-proposed-outbox-first")
 
     async with create_runtime(settings) as runtime:
         await runtime.record_episode_handler().handle(command)
         await runtime.relay_outbox_once()
 
-    assert count_claim_proposals(postgres_connection) == 1
+        assert count_claim_proposals(postgres_connection) == 1
+        assert count_claim_proposed_outbox_events(postgres_connection) == 1
+        assert count_unpublished_claim_proposed_outbox_events(postgres_connection) == 1
+
+        await runtime.relay_outbox_once()
+
+        published = [
+            event
+            for event in runtime.logging_outbox_event_publisher.published
+            if event.event_type == "memory.claim-proposed"
+        ]
+        assert len(published) == 1
 
 
 @pytest.mark.postgres
@@ -69,6 +111,7 @@ async def test_duplicate_inbox_delivery_does_not_duplicate_claims(
         duplicate_result = await runtime.process_inbox_handler().handle(event)
 
     assert count_claim_proposals(postgres_connection) == 1
+    assert count_claim_proposed_outbox_events(postgres_connection) == 1
     assert duplicate_result.processed is False
     assert duplicate_result.skipped is True
 

@@ -25,6 +25,7 @@ from engrammesh.modules.memory.domain.model import (
     TemporalStatus,
 )
 from engrammesh.modules.memory.ports import (
+    AddProposalResult,
     AppendResult,
     AuthorizationRequest,
     CandidateIndex,
@@ -182,6 +183,10 @@ DATACLASS_SHAPES = {
         ("recorded_at", datetime | None, None),
         ("limit", int, 10),
     ),
+    AddProposalResult: (
+        ("claim_id", MemoryId, MISSING),
+        ("created", bool, MISSING),
+    ),
     AppendResult: (
         ("episode_id", MemoryId, MISSING),
         ("created", bool, MISSING),
@@ -226,7 +231,7 @@ PROTOCOL_SIGNATURES = {
     ),
     ClaimStore.add_proposal: (
         (("self", EMPTY, EMPTY), ("proposal", ClaimProposal, EMPTY)),
-        None,
+        AddProposalResult,
     ),
     ClaimStore.current: (
         (("self", EMPTY, EMPTY), ("query", MemoryQuery, EMPTY)),

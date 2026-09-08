@@ -1,0 +1,239 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://engrammesh.org/contracts/memory/v1/claim-proposed.schema.json",
+  "version": "1.0.0",
+  "title": "Memory Claim Proposed Event",
+  "description": "Version 1.0.0 contract for a newly proposed semantic claim.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "event_type",
+    "schema_version",
+    "tenant_id",
+    "aggregate_id",
+    "aggregate_version",
+    "correlation_id",
+    "causation_id",
+    "occurred_at",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "event_type": {
+      "const": "memory.claim-proposed"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "aggregate_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "aggregate_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "correlation_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "causation_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "payload": {
+      "$ref": "#/$defs/payload"
+    }
+  },
+  "$defs": {
+    "memoryScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subject_id"
+      ],
+      "properties": {
+        "subject_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "workspace_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "agent_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        }
+      }
+    },
+    "evidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "episode_id",
+        "source_span",
+        "extractor_version"
+      ],
+      "properties": {
+        "episode_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "source_span": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "extractor_version": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "model_ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "prompt_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim_id",
+        "episode_id",
+        "scope",
+        "subject",
+        "predicate",
+        "object_value",
+        "polarity",
+        "epistemic_kind",
+        "confidence",
+        "valid_from",
+        "valid_to",
+        "recorded_from",
+        "status",
+        "extractor_version",
+        "evidence"
+      ],
+      "properties": {
+        "claim_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "episode_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "scope": {
+          "$ref": "#/$defs/memoryScope"
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "predicate": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "object_value": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "polarity": {
+          "type": "boolean"
+        },
+        "epistemic_kind": {
+          "enum": [
+            "observed",
+            "extracted",
+            "inferred",
+            "human_confirmed"
+          ]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "valid_from": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+        },
+        "valid_to": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+        },
+        "recorded_from": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "accepted",
+            "disputed",
+            "retracted",
+            "superseded"
+          ]
+        },
+        "extractor_version": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/evidenceRef"
+          }
+        }
+      }
+    }
+  }
+}

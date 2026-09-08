@@ -642,8 +642,11 @@ async def assert_add_proposal_idempotent(
     proposal = make_claim_proposal(episode, memory_id(100))
     async with harness.unit_of_work_factory.create() as unit_of_work:
         await unit_of_work.episodes.append(episode)
-        await unit_of_work.claims.add_proposal(proposal)
-        await unit_of_work.claims.add_proposal(proposal)
+        first = await unit_of_work.claims.add_proposal(proposal)
+        second = await unit_of_work.claims.add_proposal(proposal)
+        assert first.created is True
+        assert second.created is False
+        assert second.claim_id == memory_id(100)
         await unit_of_work.commit()
     async with harness.unit_of_work_factory.create() as unit_of_work:
         results = await unit_of_work.claims.current(

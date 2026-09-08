@@ -66,8 +66,11 @@ async def test_add_proposal_is_idempotent_for_same_episode_and_extractor(
     proposal = make_claim_proposal(episode, memory_id(101))
     async with unit_of_work_factory.create() as unit_of_work:
         await unit_of_work.episodes.append(episode)
-        await unit_of_work.claims.add_proposal(proposal)
-        await unit_of_work.claims.add_proposal(proposal)
+        first = await unit_of_work.claims.add_proposal(proposal)
+        second = await unit_of_work.claims.add_proposal(proposal)
+        assert first.created is True
+        assert second.created is False
+        assert second.claim_id == memory_id(101)
         await unit_of_work.commit()
     async with unit_of_work_factory.create() as unit_of_work:
         results = await unit_of_work.claims.current(

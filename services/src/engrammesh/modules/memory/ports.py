@@ -61,6 +61,14 @@ class AppendResult:
 
 
 @dataclass(frozen=True, slots=True)
+class AddProposalResult:
+    """Outcome of an idempotent claim proposal append."""
+
+    claim_id: MemoryId
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ClaimProposal:
     """Claim awaiting admission and lifecycle processing."""
 
@@ -117,7 +125,7 @@ class EpisodeStore(Protocol):
 class ClaimStore(Protocol):
     """Claim fact-store boundary."""
 
-    async def add_proposal(self, proposal: ClaimProposal) -> None: ...
+    async def add_proposal(self, proposal: ClaimProposal) -> AddProposalResult: ...
 
     async def current(self, query: MemoryQuery) -> tuple[Claim, ...]: ...
 
