@@ -16,6 +16,7 @@ from uuid import UUID
 
 import pytest
 
+from engrammesh.modules.memory.domain.claim_cursor import encode_claim_cursor
 from engrammesh.modules.memory.domain.episode_cursor import encode_episode_cursor
 from engrammesh.modules.memory.domain.errors import (
     ClaimsUnavailable,
@@ -714,6 +715,54 @@ async def assert_history_scope_mismatch(
         assert history == ()
 
 
+async def assert_stream_respects_limit(
+    make_harness: MemoryAdapterHarnessFactory,
+) -> None:
+    harness = make_harness()
+    scope = make_scope()
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        for index in range(3):
+            episode = make_episode(index, scope=scope)
+            await unit_of_work.episodes.append(episode)
+            await unit_of_work.claims.add_proposal(
+                make_claim_proposal(episode, memory_id(100 + index))
+            )
+        await unit_of_work.commit()
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        results = await unit_of_work.claims.stream(scope, limit=2)
+        assert len(results) == 2
+        assert results[0].id == memory_id(102)
+        assert results[1].id == memory_id(101)
+
+
+async def assert_stream_cursor_pagination(
+    make_harness: MemoryAdapterHarnessFactory,
+) -> None:
+    harness = make_harness()
+    scope = make_scope()
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        for index in range(3):
+            episode = make_episode(index, scope=scope)
+            await unit_of_work.episodes.append(episode)
+            await unit_of_work.claims.add_proposal(
+                make_claim_proposal(episode, memory_id(100 + index))
+            )
+        await unit_of_work.commit()
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        page_one = await unit_of_work.claims.stream(scope, limit=2)
+        assert len(page_one) == 2
+        cursor = encode_claim_cursor(
+            recorded_from=page_one[-1].recorded_from,
+            claim_id=page_one[-1].id,
+        )
+        page_two = await unit_of_work.claims.stream(
+            scope, limit=2, cursor=cursor
+        )
+        assert len(page_two) == 1
+        assert page_one[0].id != page_two[0].id
+        assert {claim.id for claim in page_one} & {claim.id for claim in page_two} == set()
+
+
 async def assert_cursor_pagination_is_stable(
     make_harness: MemoryAdapterHarnessFactory,
 ) -> None:
@@ -938,4 +987,6 @@ CLAIM_ADAPTER_CONTRACTS: tuple[
     ("current_respects_limit", assert_current_respects_limit),
     ("history_returns_claim", assert_history_returns_claim),
     ("history_scope_mismatch", assert_history_scope_mismatch),
+    ("stream_respects_limit", assert_stream_respects_limit),
+    ("stream_cursor_pagination", assert_stream_cursor_pagination),
 )

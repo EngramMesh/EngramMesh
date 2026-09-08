@@ -80,7 +80,7 @@ PROTOCOLS = (
 
 EXPECTED_METHODS = {
     EpisodeStore: ("append", "get", "stream"),
-    ClaimStore: ("add_proposal", "current", "history"),
+    ClaimStore: ("add_proposal", "current", "history", "stream"),
     CandidateIndex: ("search", "upsert", "remove"),
     MemoryAuthorizationPort: ("authorize",),
     MemoryExtractorPort: ("propose",),
@@ -242,6 +242,15 @@ PROTOCOL_SIGNATURES = {
             ("self", EMPTY, EMPTY),
             ("scope", MemoryScope, EMPTY),
             ("claim_id", MemoryId, EMPTY),
+        ),
+        tuple[Claim, ...],
+    ),
+    ClaimStore.stream: (
+        (
+            ("self", EMPTY, EMPTY),
+            ("scope", MemoryScope, EMPTY),
+            ("limit", int | None, None),
+            ("cursor", str | None, None),
         ),
         tuple[Claim, ...],
     ),
@@ -469,7 +478,10 @@ def test_protocol_methods_have_exact_signatures(
                 InboxStore.try_record,
                 InboxStore.remove_record,
                 EpisodeStore.stream,
-            ) and not (method == EpisodeStore.stream and name == "scope")
+                ClaimStore.stream,
+            ) and not (
+                method in (EpisodeStore.stream, ClaimStore.stream) and name == "scope"
+            )
             else PARAMETER,
         )
         for name, annotation, default in expected_parameters
