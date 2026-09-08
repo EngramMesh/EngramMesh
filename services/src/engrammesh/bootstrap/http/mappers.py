@@ -6,7 +6,9 @@ from engrammesh.bootstrap.auth.ports import AuthenticatedPrincipal
 from engrammesh.bootstrap.http.schemas import (
     BudgetRequest,
     CancelExecutionRequest,
+    ClaimResponse,
     EpisodeResponse,
+    EvidenceRefResponse,
     ExecutionSnapshotResponse,
     ExecutionSummaryResponse,
     FailureResponse,
@@ -20,12 +22,18 @@ from engrammesh.bootstrap.http.schemas import (
     SuspensionResponse,
 )
 from engrammesh.modules.memory.application.contracts import (
+    GetClaimQuery,
     GetEpisodeQuery,
+    ListClaimsQuery,
     ListEpisodesQuery,
     RecordEpisodeCommand,
     RecordEpisodeResult,
 )
-from engrammesh.modules.memory.domain.model import Episode, MemoryScope
+from engrammesh.modules.memory.domain.model import (
+    Claim,
+    Episode,
+    MemoryScope,
+)
 from engrammesh.modules.memory.ports import MemoryQuery
 from engrammesh.modules.runtime.application.contracts import (
     CancelExecutionCommand,
@@ -253,6 +261,73 @@ def episode_to_response(episode: Episode) -> EpisodeResponse:
     )
 
 
+def claim_to_response(claim: Claim) -> ClaimResponse:
+    """Map a domain claim to an HTTP response body."""
+    return ClaimResponse(
+        claim_id=str(claim.id.value),
+        scope=ScopeResponse(
+            tenant_id=claim.scope.tenant_id.value,
+            subject_id=claim.scope.subject_id.value,
+            workspace_id=claim.scope.workspace_id,
+            agent_id=(
+                claim.scope.agent_id.value
+                if claim.scope.agent_id is not None
+                else None
+            ),
+        ),
+        episode_id=claim.evidence[0].episode_id.value,
+        subject=claim.subject,
+        predicate=claim.predicate,
+        object_value=claim.object_value,
+        polarity=claim.polarity,
+        epistemic_kind=claim.epistemic_kind,
+        confidence=claim.confidence,
+        valid_from=claim.valid_from,
+        valid_to=claim.valid_to,
+        recorded_from=claim.recorded_from,
+        recorded_to=claim.recorded_to,
+        status=claim.status,
+        extractor_version=claim.evidence[0].extractor_version,
+        evidence=tuple(
+            EvidenceRefResponse(
+                episode_id=ref.episode_id.value,
+                source_span=ref.source_span,
+                extractor_version=ref.extractor_version,
+                model_ref=ref.model_ref,
+                prompt_version=ref.prompt_version,
+            )
+            for ref in claim.evidence
+        ),
+    )
+
+
+def to_get_claim_query(
+    *,
+    path_tenant_id: TenantId,
+    claim_id: MemoryId,
+    actor_id: SubjectId | None = None,
+    subject_id: SubjectId,
+    workspace_id: str | None,
+    agent_id: AgentInstanceId | None,
+    principal: AuthenticatedPrincipal | None = None,
+) -> GetClaimQuery:
+    """Map HTTP path and query parameters to a get-claim application query."""
+    resolved_actor_id = _resolve_actor_id(
+        principal=principal,
+        body_or_query_actor_id=actor_id.value if actor_id is not None else None,
+    )
+    return GetClaimQuery(
+        actor_id=resolved_actor_id,
+        scope=MemoryScope(
+            tenant_id=path_tenant_id,
+            subject_id=subject_id,
+            workspace_id=workspace_id,
+            agent_id=agent_id,
+        ),
+        claim_id=claim_id,
+    )
+
+
 def to_get_episode_query(
     *,
     path_tenant_id: TenantId,
@@ -299,6 +374,37 @@ def to_list_episodes_query(
         body_or_query_actor_id=actor_id.value if actor_id is not None else None,
     )
     return ListEpisodesQuery(
+        actor_id=resolved_actor_id,
+        scope=MemoryScope(
+            tenant_id=path_tenant_id,
+            subject_id=subject_id,
+            workspace_id=workspace_id,
+            agent_id=agent_id,
+        ),
+        limit=limit,
+        cursor=cursor,
+    )
+
+
+def to_list_claims_query(
+    *,
+    path_tenant_id: TenantId,
+    actor_id: SubjectId | None = None,
+    subject_id: SubjectId,
+    workspace_id: str | None,
+    agent_id: AgentInstanceId | None,
+    limit: int,
+    cursor: str | None,
+    principal: AuthenticatedPrincipal | None = None,
+) -> ListClaimsQuery:
+    """Map HTTP path and query parameters to a list-claims application query."""
+    if limit < 1 or limit > 100:
+        raise LimitOutOfRangeError("limit must be between 1 and 100")
+    resolved_actor_id = _resolve_actor_id(
+        principal=principal,
+        body_or_query_actor_id=actor_id.value if actor_id is not None else None,
+    )
+    return ListClaimsQuery(
         actor_id=resolved_actor_id,
         scope=MemoryScope(
             tenant_id=path_tenant_id,

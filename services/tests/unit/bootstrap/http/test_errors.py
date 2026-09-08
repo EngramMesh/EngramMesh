@@ -14,12 +14,16 @@ from engrammesh.bootstrap.http.mappers import (
 )
 from engrammesh.bootstrap.settings import ConfigurationError
 from engrammesh.modules.memory.application.errors import (
+    ClaimNotFound,
+    ClaimReadAuthorizationDenied,
     EpisodeAuthorizationDenied,
     EpisodeNotFound,
     EpisodeReadAuthorizationDenied,
 )
 from engrammesh.modules.memory.domain.errors import (
+    ClaimsUnavailable,
     EpisodeIdempotencyConflict,
+    InvalidClaimCursor,
     InvalidEpisodeCursor,
 )
 from engrammesh.modules.runtime.domain.errors import InvalidExecutionCursor
@@ -59,13 +63,29 @@ def error_app() -> FastAPI:
     async def episode_read_authorization_denied() -> None:
         raise EpisodeReadAuthorizationDenied()
 
+    @app.get("/claim-read-authorization-denied")
+    async def claim_read_authorization_denied() -> None:
+        raise ClaimReadAuthorizationDenied()
+
     @app.get("/episode-not-found")
     async def episode_not_found() -> None:
         raise EpisodeNotFound()
 
+    @app.get("/claim-not-found")
+    async def claim_not_found() -> None:
+        raise ClaimNotFound()
+
     @app.get("/invalid-episode-cursor")
     async def invalid_episode_cursor() -> None:
         raise InvalidEpisodeCursor()
+
+    @app.get("/invalid-claim-cursor")
+    async def invalid_claim_cursor() -> None:
+        raise InvalidClaimCursor()
+
+    @app.get("/claims-unavailable")
+    async def claims_unavailable() -> None:
+        raise ClaimsUnavailable()
 
     @app.get("/invalid-execution-cursor")
     async def invalid_execution_cursor() -> None:
@@ -135,6 +155,22 @@ async def test_episode_read_authorization_denied_maps_to_403(
 
 
 @pytest.mark.asyncio
+async def test_claim_read_authorization_denied_maps_to_403(
+    error_app: FastAPI,
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=error_app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/claim-read-authorization-denied")
+    assert response.status_code == 403
+    assert response.json() == error_envelope(
+        "claim_read_authorization_denied",
+        "claim reading is not authorized",
+    )
+
+
+@pytest.mark.asyncio
 async def test_episode_not_found_maps_to_404(error_app: FastAPI) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=error_app),
@@ -149,6 +185,20 @@ async def test_episode_not_found_maps_to_404(error_app: FastAPI) -> None:
 
 
 @pytest.mark.asyncio
+async def test_claim_not_found_maps_to_404(error_app: FastAPI) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=error_app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/claim-not-found")
+    assert response.status_code == 404
+    assert response.json() == error_envelope(
+        "claim_not_found",
+        "claim not found",
+    )
+
+
+@pytest.mark.asyncio
 async def test_invalid_episode_cursor_maps_to_422(error_app: FastAPI) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=error_app),
@@ -159,6 +209,34 @@ async def test_invalid_episode_cursor_maps_to_422(error_app: FastAPI) -> None:
     assert response.json() == error_envelope(
         "invalid_episode_cursor",
         "episode list cursor is invalid",
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalid_claim_cursor_maps_to_422(error_app: FastAPI) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=error_app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/invalid-claim-cursor")
+    assert response.status_code == 422
+    assert response.json() == error_envelope(
+        "invalid_claim_cursor",
+        "claim list cursor is invalid",
+    )
+
+
+@pytest.mark.asyncio
+async def test_claims_unavailable_maps_to_503(error_app: FastAPI) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=error_app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/claims-unavailable")
+    assert response.status_code == 503
+    assert response.json() == error_envelope(
+        "claims_unavailable",
+        "claim store is unavailable",
     )
 
 

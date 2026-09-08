@@ -40,7 +40,9 @@ from engrammesh.modules.memory.application.episode_recorded_processor import (
 from engrammesh.modules.memory.application.extract_claims_from_episode import (
     ExtractClaimsFromEpisodeHandler,
 )
+from engrammesh.modules.memory.application.get_claim import GetClaimHandler
 from engrammesh.modules.memory.application.get_episode import GetEpisodeHandler
+from engrammesh.modules.memory.application.list_claims import ListClaimsHandler
 from engrammesh.modules.memory.application.list_episodes import ListEpisodesHandler
 from engrammesh.modules.memory.application.process_inbox_event import (
     ProcessInboxEventHandler,
@@ -120,10 +122,12 @@ class AppRuntime:
         "_cancel_execution_handler",
         "_database",
         "_execution_snapshot_store",
+        "_get_claim_handler",
         "_get_episode_handler",
         "_get_execution_snapshot_handler",
         "_handler",
         "_inbox_handler",
+        "_list_claims_handler",
         "_list_episodes_handler",
         "_list_executions_handler",
         "_logging_publisher",
@@ -148,7 +152,9 @@ class AppRuntime:
         self._database: PostgresMemoryDatabase | None = None
         self._unit_of_work_factory: PostgresMemoryUnitOfWorkFactory | None = None
         self._handler: RecordEpisodeHandler | None = None
+        self._get_claim_handler: GetClaimHandler | None = None
         self._get_episode_handler: GetEpisodeHandler | None = None
+        self._list_claims_handler: ListClaimsHandler | None = None
         self._list_episodes_handler: ListEpisodesHandler | None = None
         self._inbox_handler: ProcessInboxEventHandler | None = None
         self._logging_publisher = LoggingOutboxEventPublisher()
@@ -265,7 +271,9 @@ class AppRuntime:
         self._database = None
         self._unit_of_work_factory = None
         self._handler = None
+        self._get_claim_handler = None
         self._get_episode_handler = None
+        self._list_claims_handler = None
         self._list_episodes_handler = None
         self._list_executions_handler = None
         self._execution_snapshot_store = None
@@ -378,6 +386,34 @@ class AppRuntime:
                 unit_of_work_factory=self._unit_of_work_factory,
             )
         return self._list_episodes_handler
+
+    def get_claim_handler(self) -> GetClaimHandler:
+        if not self._settings.modules.memory_enabled:
+            msg = "memory module is disabled"
+            raise ConfigurationError("memory_disabled", msg)
+        if not self._started or self._unit_of_work_factory is None:
+            msg = "application runtime is not started"
+            raise RuntimeError(msg)
+        if self._get_claim_handler is None:
+            self._get_claim_handler = GetClaimHandler(
+                authorization=create_memory_authorization(self._settings),
+                unit_of_work_factory=self._unit_of_work_factory,
+            )
+        return self._get_claim_handler
+
+    def list_claims_handler(self) -> ListClaimsHandler:
+        if not self._settings.modules.memory_enabled:
+            msg = "memory module is disabled"
+            raise ConfigurationError("memory_disabled", msg)
+        if not self._started or self._unit_of_work_factory is None:
+            msg = "application runtime is not started"
+            raise RuntimeError(msg)
+        if self._list_claims_handler is None:
+            self._list_claims_handler = ListClaimsHandler(
+                authorization=create_memory_authorization(self._settings),
+                unit_of_work_factory=self._unit_of_work_factory,
+            )
+        return self._list_claims_handler
 
     def relay_outbox_handler(self) -> RelayOutboxEventsHandler:
         if not self._settings.modules.memory_enabled:

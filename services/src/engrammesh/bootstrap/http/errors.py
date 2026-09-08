@@ -24,12 +24,16 @@ from engrammesh.bootstrap.http.mappers import (
 )
 from engrammesh.bootstrap.settings import ConfigurationError
 from engrammesh.modules.memory.application.errors import (
+    ClaimNotFound,
+    ClaimReadAuthorizationDenied,
     EpisodeAuthorizationDenied,
     EpisodeNotFound,
     EpisodeReadAuthorizationDenied,
 )
 from engrammesh.modules.memory.domain.errors import (
+    ClaimsUnavailable,
     EpisodeIdempotencyConflict,
+    InvalidClaimCursor,
     InvalidEpisodeCursor,
 )
 from engrammesh.modules.runtime.application.errors import (
@@ -45,8 +49,12 @@ from engrammesh.modules.runtime.domain.errors import (
 
 _EPISODE_AUTHORIZATION_DENIED_MESSAGE = "episode recording is not authorized"
 _EPISODE_READ_AUTHORIZATION_DENIED_MESSAGE = "episode reading is not authorized"
+_CLAIM_READ_AUTHORIZATION_DENIED_MESSAGE = "claim reading is not authorized"
 _EPISODE_NOT_FOUND_MESSAGE = "episode not found"
+_CLAIM_NOT_FOUND_MESSAGE = "claim not found"
 _INVALID_EPISODE_CURSOR_MESSAGE = "episode list cursor is invalid"
+_INVALID_CLAIM_CURSOR_MESSAGE = "claim list cursor is invalid"
+_CLAIMS_UNAVAILABLE_MESSAGE = "claim store is unavailable"
 _EPISODE_IDEMPOTENCY_CONFLICT_MESSAGE = (
     "idempotency key conflicts with an existing episode"
 )
@@ -163,6 +171,19 @@ def register_exception_handlers(app: FastAPI) -> None:
             ),
         )
 
+    @app.exception_handler(ClaimReadAuthorizationDenied)
+    async def claim_read_authorization_denied_handler(
+        _request: Request,
+        _exc: ClaimReadAuthorizationDenied,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=403,
+            content=error_envelope(
+                "claim_read_authorization_denied",
+                _CLAIM_READ_AUTHORIZATION_DENIED_MESSAGE,
+            ),
+        )
+
     @app.exception_handler(EpisodeNotFound)
     async def episode_not_found_handler(
         _request: Request,
@@ -176,6 +197,19 @@ def register_exception_handlers(app: FastAPI) -> None:
             ),
         )
 
+    @app.exception_handler(ClaimNotFound)
+    async def claim_not_found_handler(
+        _request: Request,
+        _exc: ClaimNotFound,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content=error_envelope(
+                "claim_not_found",
+                _CLAIM_NOT_FOUND_MESSAGE,
+            ),
+        )
+
     @app.exception_handler(InvalidEpisodeCursor)
     async def invalid_episode_cursor_handler(
         _request: Request,
@@ -186,6 +220,19 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=error_envelope(
                 "invalid_episode_cursor",
                 _INVALID_EPISODE_CURSOR_MESSAGE,
+            ),
+        )
+
+    @app.exception_handler(InvalidClaimCursor)
+    async def invalid_claim_cursor_handler(
+        _request: Request,
+        _exc: InvalidClaimCursor,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content=error_envelope(
+                "invalid_claim_cursor",
+                _INVALID_CLAIM_CURSOR_MESSAGE,
             ),
         )
 
@@ -277,6 +324,19 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=error_envelope(
                 "orchestration_unavailable",
                 _ORCHESTRATION_UNAVAILABLE_MESSAGE,
+            ),
+        )
+
+    @app.exception_handler(ClaimsUnavailable)
+    async def claims_unavailable_handler(
+        _request: Request,
+        _exc: ClaimsUnavailable,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content=error_envelope(
+                "claims_unavailable",
+                _CLAIMS_UNAVAILABLE_MESSAGE,
             ),
         )
 
