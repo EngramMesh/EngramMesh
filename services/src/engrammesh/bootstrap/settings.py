@@ -117,6 +117,21 @@ class InboxSettings(_FrozenSettingsModel):
         return value
 
 
+class ClaimExtractionSettings(_FrozenSettingsModel):
+    """Claim extraction processor boundary."""
+
+    enabled: bool = True
+    extractor_version: str = "deterministic-v1"
+
+    @field_validator("extractor_version")
+    @classmethod
+    def require_non_blank_extractor_version(cls, value: str) -> str:
+        if not value.strip():
+            msg = "extractor_version must not be blank"
+            raise ValueError(msg)
+        return value
+
+
 class OutboxRelaySettings(_FrozenSettingsModel):
     """Outbox relay polling and batch dispatch boundary."""
 
@@ -196,6 +211,7 @@ class AppSettings(BaseSettings):
     modules: ModuleSettings = ModuleSettings()
     http: HttpSettings = HttpSettings()
     inbox: InboxSettings = InboxSettings()
+    claim_extraction: ClaimExtractionSettings = ClaimExtractionSettings()
     outbox_relay: OutboxRelaySettings = OutboxRelaySettings()
     runtime_outbox_relay: RuntimeOutboxRelaySettings = RuntimeOutboxRelaySettings()
     oidc: OidcSettings = OidcSettings()

@@ -584,7 +584,8 @@ When `inbox.enabled` is `True` (default), relay dispatch flows through
 `InboxOutboxEventPublisher`, which runs inbox processing before the logging
 delegate. `ProcessInboxEventHandler` routes supported events to pluggable
 processors; v1 registers `EpisodeRecordedProcessor` for
-`memory.episode-recorded` structural validation (no projection side effects).
+`memory.episode-recorded` structural validation and deterministic claim
+extraction (Phase 2 entry slice).
 
 ```text
 RelayOutboxEventsHandler
@@ -593,10 +594,40 @@ RelayOutboxEventsHandler
           → select InboxEventProcessor by event_type
           → InboxStore.try_record(event_id, ...)
           → EpisodeRecordedProcessor.process(event)
+              → structural validation
+              → ExtractClaimsFromEpisodeHandler.handle(event)
+                  → DeterministicMemoryExtractor.propose(episode)
+                  → PostgresClaimStore.add_proposal(...)
           → on failure: InboxStore.remove_record(event_id)
       → LoggingOutboxEventPublisher.publish(event)   # test visibility only
   → OutboxRelayStore.mark_published(...)
 ```
+
+Migration `004_claim_proposals.sql` creates `memory_claim_proposals` with
+idempotent `UNIQUE (tenant_id, episode_id, extractor_version)`.
+
+### Claim extraction configuration
+
+```python
+class ClaimExtractionSettings:
+    enabled: bool = True
+    extractor_version: str = "deterministic-v1"
+```
+
+| Environment variable | Default |
+|---------------------|---------|
+| `ENGRAMMESH__CLAIM_EXTRACTION__ENABLED` | `true` |
+| `ENGRAMMESH__CLAIM_EXTRACTION__EXTRACTOR_VERSION` | `deterministic-v1` |
+
+When `claim_extraction.enabled=false`, inbox validation runs without persisting
+claims. Extraction requires `inbox.enabled=true` (relay must reach the inbox
+processor).
+
+**Non-goals (this slice):** LLM or prompt-based extraction; artifact content
+fetch; claim read HTTP APIs; semantic search or vector/graph projections;
+entity resolution or admission workflows; `memory.claim-proposed` outbox events;
+runtime inbox for `runtime.execution-status-changed`; Kafka or inbox schema
+changes; changes to `RecordEpisodeHandler` or episode ingest HTTP semantics.
 
 **Delegate vs inbox authority:** `InboxOutboxEventPublisher` always calls the
 logging delegate after inbox handling, including when the handler returns

@@ -26,6 +26,11 @@ def test_migrations_dir_contains_inbox_events_sql() -> None:
     assert migration.is_file()
 
 
+def test_migrations_dir_contains_claim_proposals_sql() -> None:
+    migration = MIGRATIONS_DIR / "004_claim_proposals.sql"
+    assert migration.is_file()
+
+
 @pytest.mark.postgres
 def test_apply_migrations_records_applied_versions(
     postgres_connection: Connection,
@@ -43,6 +48,7 @@ def test_apply_migrations_records_applied_versions(
         "001_episode_outbox",
         "002_outbox_relay_index",
         "003_inbox_events",
+        "004_claim_proposals",
     }
 
 
@@ -55,4 +61,4 @@ def test_apply_migrations_is_idempotent(postgres_connection: Connection) -> None
         "SELECT COUNT(*) FROM memory_schema_migrations"
     ).fetchone()[0]
 
-    assert count == 3
+    assert count == 4

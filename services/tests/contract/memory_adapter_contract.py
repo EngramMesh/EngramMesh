@@ -19,7 +19,11 @@ import pytest
 from engrammesh.modules.memory.domain.episode_cursor import encode_episode_cursor
 from engrammesh.modules.memory.domain.errors import EpisodeIdempotencyConflict
 from engrammesh.modules.memory.domain.model import (
+    Claim,
+    ClaimStatus,
     Episode,
+    EpistemicKind,
+    EvidenceRef,
     MemoryScope,
     RetentionClass,
     Sensitivity,
@@ -582,6 +586,126 @@ async def assert_claim_operations_are_unavailable(
             await unit_of_work.claims.history(make_scope(), memory_id(1))
 
 
+def make_claim_proposal(
+    episode: Episode,
+    claim_id: MemoryId,
+    extractor_version: str = "deterministic-v1",
+) -> ClaimProposal:
+    claim = Claim(
+        id=claim_id,
+        scope=episode.scope,
+        subject=str(episode.scope.subject_id),
+        predicate="observed_content_hash",
+        object_value=episode.content_hash,
+        polarity=True,
+        epistemic_kind=EpistemicKind.EXTRACTED,
+        confidence=1.0,
+        valid_from=episode.observed_at,
+        valid_to=None,
+        recorded_from=episode.ingested_at,
+        recorded_to=None,
+        status=ClaimStatus.PROPOSED,
+        evidence=(
+            EvidenceRef(
+                episode_id=episode.id,
+                source_span="metadata",
+                extractor_version=extractor_version,
+            ),
+        ),
+    )
+    return ClaimProposal(claim=claim)
+
+
+async def assert_add_proposal_persists(
+    make_harness: MemoryAdapterHarnessFactory,
+) -> None:
+    harness = make_harness()
+    episode = make_episode(1)
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        await unit_of_work.episodes.append(episode)
+        proposal = make_claim_proposal(episode, memory_id(100))
+        await unit_of_work.claims.add_proposal(proposal)
+        await unit_of_work.commit()
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        results = await unit_of_work.claims.current(
+            MemoryQuery(query_id="q1", scope=episode.scope, text="ignored")
+        )
+        assert len(results) == 1
+        assert results[0].id == memory_id(100)
+
+
+async def assert_add_proposal_idempotent(
+    make_harness: MemoryAdapterHarnessFactory,
+) -> None:
+    harness = make_harness()
+    episode = make_episode(1)
+    proposal = make_claim_proposal(episode, memory_id(100))
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        await unit_of_work.episodes.append(episode)
+        await unit_of_work.claims.add_proposal(proposal)
+        await unit_of_work.claims.add_proposal(proposal)
+        await unit_of_work.commit()
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        results = await unit_of_work.claims.current(
+            MemoryQuery(query_id="q1", scope=episode.scope, text="ignored")
+        )
+        assert len(results) == 1
+
+
+async def assert_current_respects_limit(
+    make_harness: MemoryAdapterHarnessFactory,
+) -> None:
+    harness = make_harness()
+    scope = make_scope()
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        for index in range(3):
+            episode = make_episode(index, scope=scope)
+            await unit_of_work.episodes.append(episode)
+            await unit_of_work.claims.add_proposal(
+                make_claim_proposal(episode, memory_id(100 + index))
+            )
+        await unit_of_work.commit()
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        results = await unit_of_work.claims.current(
+            MemoryQuery(query_id="q1", scope=scope, text="ignored", limit=2)
+        )
+        assert len(results) == 2
+        assert results[0].id == memory_id(102)
+        assert results[1].id == memory_id(101)
+
+
+async def assert_history_returns_claim(
+    make_harness: MemoryAdapterHarnessFactory,
+) -> None:
+    harness = make_harness()
+    episode = make_episode(1)
+    claim_id = memory_id(200)
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        await unit_of_work.episodes.append(episode)
+        await unit_of_work.claims.add_proposal(make_claim_proposal(episode, claim_id))
+        await unit_of_work.commit()
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        history = await unit_of_work.claims.history(episode.scope, claim_id)
+        assert len(history) == 1
+        assert history[0].id == claim_id
+
+
+async def assert_history_scope_mismatch(
+    make_harness: MemoryAdapterHarnessFactory,
+) -> None:
+    harness = make_harness()
+    episode = make_episode(1)
+    claim_id = memory_id(201)
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        await unit_of_work.episodes.append(episode)
+        await unit_of_work.claims.add_proposal(make_claim_proposal(episode, claim_id))
+        await unit_of_work.commit()
+    wrong_scope = make_scope(subject_id=SUBJECT_B)
+    async with harness.unit_of_work_factory.create() as unit_of_work:
+        history = await unit_of_work.claims.history(wrong_scope, claim_id)
+        assert history == ()
+
+
 async def assert_cursor_pagination_is_stable(
     make_harness: MemoryAdapterHarnessFactory,
 ) -> None:
@@ -795,4 +919,15 @@ IN_MEMORY_CAPABILITY_CONTRACTS: tuple[
         "cancel_while_queued",
         assert_cancellation_while_queued_releases_lock,
     ),
+)
+
+CLAIM_ADAPTER_CONTRACTS: tuple[
+    tuple[str, MemoryAdapterContractAssertion],
+    ...,
+] = (
+    ("add_proposal_persists", assert_add_proposal_persists),
+    ("add_proposal_idempotent", assert_add_proposal_idempotent),
+    ("current_respects_limit", assert_current_respects_limit),
+    ("history_returns_claim", assert_history_returns_claim),
+    ("history_scope_mismatch", assert_history_scope_mismatch),
 )

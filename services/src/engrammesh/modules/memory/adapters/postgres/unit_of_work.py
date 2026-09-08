@@ -14,10 +14,12 @@ from engrammesh.modules.memory.adapters.postgres.connection import (
     PostgresMemoryDatabase,
 )
 from engrammesh.modules.memory.adapters.postgres.mappers import (
+    claim_to_row,
     episode_request_fingerprint,
     episode_request_fingerprint_from_row,
     episode_to_row,
     event_to_row,
+    row_to_claim,
     row_to_episode,
 )
 from engrammesh.modules.memory.domain.episode_cursor import decode_episode_cursor
@@ -90,6 +92,28 @@ _OUTBOX_COLUMNS = (
     "occurred_at",
     "payload",
     "published_at",
+)
+
+_CLAIM_COLUMNS = (
+    "tenant_id",
+    "claim_id",
+    "episode_id",
+    "subject_id",
+    "workspace_id",
+    "agent_id",
+    "subject",
+    "predicate",
+    "object_value",
+    "polarity",
+    "epistemic_kind",
+    "confidence",
+    "valid_from",
+    "valid_to",
+    "recorded_from",
+    "recorded_to",
+    "status",
+    "evidence",
+    "extractor_version",
 )
 
 
@@ -304,6 +328,86 @@ class _PostgresEpisodeStore:
 
 
 @final
+class _PostgresClaimStore:
+    __slots__ = ("_state",)
+
+    def __init__(self, state: _PostgresTransactionState) -> None:
+        self._state = state
+
+    async def add_proposal(self, proposal: ClaimProposal) -> None:
+        self._state.require_usable()
+        claim = proposal.claim
+        episode_id = claim.evidence[0].episode_id
+        row = claim_to_row(claim, episode_id=episode_id)
+        await self._state.connection.execute(
+            f"""
+            INSERT INTO memory_claim_proposals ({", ".join(_CLAIM_COLUMNS)})
+            VALUES ({", ".join(f"%({column})s" for column in _CLAIM_COLUMNS)})
+            ON CONFLICT (tenant_id, episode_id, extractor_version) DO NOTHING
+            """,
+            {**row, "evidence": Jsonb(row["evidence"])},
+        )
+
+    async def current(self, query: MemoryQuery) -> tuple[Claim, ...]:
+        self._state.require_usable()
+        params = {
+            "tenant_id": query.scope.tenant_id.value,
+            "subject_id": query.scope.subject_id.value,
+            "workspace_id": query.scope.workspace_id,
+            "agent_id": (
+                query.scope.agent_id.value
+                if query.scope.agent_id is not None
+                else None
+            ),
+            "limit": query.limit,
+        }
+        async with self._state.connection.cursor(row_factory=dict_row) as cursor:
+            await cursor.execute(
+                f"""
+                SELECT {", ".join(_CLAIM_COLUMNS)}
+                FROM memory_claim_proposals
+                WHERE tenant_id = %(tenant_id)s
+                  AND subject_id = %(subject_id)s
+                  AND workspace_id IS NOT DISTINCT FROM %(workspace_id)s
+                  AND agent_id IS NOT DISTINCT FROM %(agent_id)s
+                  AND status = 'proposed'
+                  AND recorded_to IS NULL
+                ORDER BY recorded_from DESC, claim_id DESC
+                LIMIT %(limit)s
+                """,
+                params,
+            )
+            rows = await cursor.fetchall()
+        return tuple(row_to_claim(row) for row in rows)
+
+    async def history(
+        self,
+        scope: MemoryScope,
+        claim_id: MemoryId,
+    ) -> tuple[Claim, ...]:
+        self._state.require_usable()
+        params = {
+            **_scope_params(scope),
+            "claim_id": claim_id.value,
+        }
+        async with self._state.connection.cursor(row_factory=dict_row) as cursor:
+            await cursor.execute(
+                f"""
+                SELECT {", ".join(_CLAIM_COLUMNS)}
+                FROM memory_claim_proposals
+                WHERE tenant_id = %(tenant_id)s
+                  AND claim_id = %(claim_id)s
+                  AND subject_id = %(subject_id)s
+                  AND workspace_id IS NOT DISTINCT FROM %(workspace_id)s
+                  AND agent_id IS NOT DISTINCT FROM %(agent_id)s
+                """,
+                params,
+            )
+            rows = await cursor.fetchall()
+        return tuple(row_to_claim(row) for row in rows)
+
+
+@final
 class _UnavailableClaimStore:
     __slots__ = ("_state",)
 
@@ -406,7 +510,7 @@ class PostgresMemoryUnitOfWork:
         state = _PostgresTransactionState(self._connection)
         self._state = state
         self._episodes = _PostgresEpisodeStore(state)
-        self._claims = _UnavailableClaimStore(state)
+        self._claims = _PostgresClaimStore(state)
         self._outbox = _PostgresOutboxPort(state)
         return self
 

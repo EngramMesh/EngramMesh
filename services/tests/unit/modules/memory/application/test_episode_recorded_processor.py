@@ -7,6 +7,10 @@ import pytest
 from engrammesh.modules.memory.application.episode_recorded_processor import (
     EpisodeRecordedProcessor,
 )
+from engrammesh.modules.memory.application.extract_claims_from_episode import (
+    ExtractClaimsFromEpisodeHandler,
+)
+from engrammesh.modules.memory.ports import MemoryExtractorPort, MemoryUnitOfWorkFactory
 from engrammesh.shared.kernel.events import EventEnvelope
 from engrammesh.shared.kernel.ids import (
     AgentInstanceId,
@@ -70,9 +74,52 @@ def make_valid_event(**overrides: object) -> EventEnvelope:
     return EventEnvelope(**defaults)  # type: ignore[arg-type]
 
 
+class _NoOpExtractor(MemoryExtractorPort):
+    async def propose(self, episode: object) -> tuple[object, ...]:
+        del episode
+        return ()
+
+
+class _NeverOpenUnitOfWorkFactory(MemoryUnitOfWorkFactory):
+    def create(self) -> object:
+        raise AssertionError("unit of work must not open when extraction is disabled")
+
+
 @pytest.fixture
 def processor() -> EpisodeRecordedProcessor:
-    return EpisodeRecordedProcessor()
+    return EpisodeRecordedProcessor(
+        extraction=ExtractClaimsFromEpisodeHandler(
+            unit_of_work_factory=_NeverOpenUnitOfWorkFactory(),
+            extractor=_NoOpExtractor(),
+            identities=_FixedIdentityPort(),
+            enabled=False,
+        ),
+    )
+
+
+class _FixedIdentityPort:
+    async def new_memory_id(self) -> MemoryId:
+        return MemoryId(UUID(int=0))
+
+    async def new_event_id(self) -> EventId:
+        return EventId(UUID(int=0))
+
+
+class _RecordingExtractionHandler:
+    def __init__(self) -> None:
+        self.handled: list[EventEnvelope] = []
+
+    async def handle(self, event: EventEnvelope) -> None:
+        self.handled.append(event)
+
+
+@pytest.mark.asyncio
+async def test_process_delegates_to_extraction_handler() -> None:
+    recording = _RecordingExtractionHandler()
+    processor = EpisodeRecordedProcessor(extraction=recording)  # type: ignore[arg-type]
+    event = make_valid_event()
+    await processor.process(event)
+    assert recording.handled == [event]
 
 
 def test_supports_returns_true_only_for_episode_recorded(

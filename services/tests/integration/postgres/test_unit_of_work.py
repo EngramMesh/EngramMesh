@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import replace
-from typing import cast
 
 import psycopg
 import pytest
@@ -37,8 +36,6 @@ from engrammesh.modules.memory.adapters.postgres.unit_of_work import (
 )
 from engrammesh.modules.memory.domain.model import Episode
 from engrammesh.modules.memory.ports import (
-    ClaimProposal,
-    MemoryQuery,
     MemoryUnitOfWorkFactory,
 )
 from engrammesh.shared.kernel.events import EventEnvelope
@@ -271,22 +268,3 @@ async def test_stream_cursor_pagination(
     harness_factory: MemoryAdapterHarnessFactory,
 ) -> None:
     await assert_cursor_pagination_is_stable(harness_factory)
-
-
-@pytest.mark.asyncio
-async def test_claims_unavailable_matches_in_memory_message(
-    harness_factory: MemoryAdapterHarnessFactory,
-) -> None:
-    harness = harness_factory()
-
-    async with harness.unit_of_work_factory.create() as unit_of_work:
-        with pytest.raises(
-            NotImplementedError,
-            match="in-memory claim store is unavailable",
-        ):
-            await unit_of_work.claims.add_proposal(cast(ClaimProposal, object()))
-        with pytest.raises(
-            NotImplementedError,
-            match="in-memory claim store is unavailable",
-        ):
-            await unit_of_work.claims.current(cast(MemoryQuery, object()))
