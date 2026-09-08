@@ -6,6 +6,8 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from engrammesh.modules.memory.domain.model import (
+    ClaimStatus,
+    EpistemicKind,
     RetentionClass,
     Sensitivity,
     SourceType,
@@ -104,6 +106,77 @@ class ListEpisodesResponse(_HttpSchemaModel):
     """HTTP response body for a paginated episode list."""
 
     items: tuple[EpisodeResponse, ...]
+    next_cursor: str | None
+
+
+class EvidenceRefResponse(_HttpSchemaModel):
+    """HTTP evidence reference in claim read responses."""
+
+    episode_id: UUID
+    source_span: str
+    extractor_version: str
+    model_ref: str | None = None
+    prompt_version: str | None = None
+
+    @field_validator("source_span", "extractor_version")
+    @classmethod
+    def _validate_non_blank(cls, value: str, info: ValidationInfo) -> str:
+        field_name = info.field_name or "field"
+        return _require_non_blank(value, field_name)
+
+
+class ClaimResponse(_HttpSchemaModel):
+    """HTTP response body for one claim."""
+
+    claim_id: str
+    scope: ScopeResponse
+    episode_id: UUID
+    subject: str
+    predicate: str
+    object_value: str
+    polarity: bool
+    epistemic_kind: EpistemicKind
+    confidence: float = Field(ge=0.0, le=1.0)
+    valid_from: datetime
+    valid_to: datetime | None
+    recorded_from: datetime
+    recorded_to: datetime | None
+    status: ClaimStatus
+    extractor_version: str
+    evidence: tuple[EvidenceRefResponse, ...]
+
+    @field_validator(
+        "subject",
+        "predicate",
+        "object_value",
+        "extractor_version",
+    )
+    @classmethod
+    def _validate_non_blank_fields(cls, value: str) -> str:
+        return _require_non_blank(value, "field")
+
+    @field_validator("valid_from", "recorded_from")
+    @classmethod
+    def _validate_required_timestamps(cls, value: datetime) -> datetime:
+        return _require_timezone_aware(value, "timestamp")
+
+    @field_validator("valid_to", "recorded_to")
+    @classmethod
+    def _validate_optional_timestamps(
+        cls,
+        value: datetime | None,
+        info: ValidationInfo,
+    ) -> datetime | None:
+        if value is None:
+            return None
+        field_name = info.field_name or "timestamp"
+        return _require_timezone_aware(value, field_name)
+
+
+class ListClaimsResponse(_HttpSchemaModel):
+    """HTTP response body for a paginated claim list."""
+
+    items: tuple[ClaimResponse, ...]
     next_cursor: str | None
 
 
