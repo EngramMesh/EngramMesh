@@ -432,6 +432,7 @@ RelayOutboxEventsHandler
               → ExtractClaimsFromEpisodeHandler.handle(event)
                   → DeterministicMemoryExtractor.propose(episode)
                   → PostgresClaimStore.add_proposal(...)
+                  → 新建时：OutboxPort.publish(memory.claim-proposed)
           → 失败时：InboxStore.remove_record(event_id)
       → LoggingOutboxEventPublisher.publish(event)   # 仅测试可见性
   → OutboxRelayStore.mark_published(...)
@@ -454,7 +455,15 @@ class ClaimExtractionSettings:
 
 当 `claim_extraction.enabled=false` 时，仅执行 Inbox 校验，不持久化 Claim。提取依赖 `inbox.enabled=true`（中继须到达 Inbox Processor）。
 
-**非目标（本切片）：** LLM 或提示词提取；拉取 Artifact 内容；Claim 读 HTTP API；语义搜索或向量/图投影；实体解析或准入工作流；`memory.claim-proposed` Outbox 事件；`runtime.execution-status-changed` 的 Runtime Inbox；Kafka 或 Inbox 表结构变更；修改 `RecordEpisodeHandler` 或 Episode 写入 HTTP 语义。
+### memory.claim-proposed Outbox 事件
+
+当 Claim 提取**新建**提案（`AddProposalResult.created`）时，`ExtractClaimsFromEpisodeHandler`
+在同一工作单元内发布 `memory.claim-proposed`。幂等重放（`created=False`）跳过 Outbox。
+合约：`packages/contracts/jsonschema/memory/v1/claim-proposed.schema.json`。
+
+**非目标（Claim 提取切片）：** LLM 或提示词提取；拉取 Artifact 内容；Claim 读 HTTP API；语义搜索或向量/图投影；实体解析或准入工作流；`runtime.execution-status-changed` 的 Runtime Inbox；Kafka 或 Inbox 表结构变更；修改 `RecordEpisodeHandler` 或 Episode 写入 HTTP 语义。
+
+**非目标（claim-proposed Outbox 切片）：** `memory.claim-proposed` 下游消费者；Claim 读 HTTP API；LLM 提取。
 
 **委托与 Inbox 权威：** `InboxOutboxEventPublisher` 在 Inbox 处理后始终调用日志委托，包括 Handler 返回 `skipped=True`（重复或不支持的事件）时。测试中断言分发可见性请用 `logging_outbox_event_publisher.published`；已处理权威请查 `memory_inbox_events` 行数。`LoggingOutboxEventPublisher.published` **不是**去重权威来源。
 

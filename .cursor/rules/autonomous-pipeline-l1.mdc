@@ -33,7 +33,7 @@ select_feature → brainstorming → spec_review → plan_write → plan_review
 | Phase | Action |
 |-------|--------|
 | `select_feature` | Pick highest-priority `pending` backlog item with satisfied deps; set `feature_id`, `status: in_progress`; write one-line rationale; go to `brainstorming` |
-| `brainstorming` | Use brainstorming skill but **skip user Q&A** — infer from backlog, RFCs, ROADMAP, codebase; write spec to `docs/superpowers/specs/YYYY-MM-DD-<id>-design.md`; self-review; go to `spec_review` |
+| `brainstorming` | Use brainstorming skill but **skip user Q&A** — infer from backlog, RFCs, ROADMAP, codebase; write spec to `docs/superpowers/specs/YYYY-MM-DD-<id>-design.md`; if `requires_rfc: true`, also create `docs/rfcs/YYYY-MM-DD-<id>.md` stub; self-review; go to `spec_review` |
 | `spec_review` | Dispatch spec reviewer subagent (`model: inherit`). Critical/Important → fix spec, increment `attempts.spec_review`, retry (max 3). Pass → `plan_write` |
 | `plan_write` | Use writing-plans skill; save to `docs/superpowers/plans/YYYY-MM-DD-<id>.md`; self-review; go to `plan_review` |
 | `plan_review` | Dispatch plan reviewer subagent (`model: inherit`). Fix loop max 3. Pass → `implementing` |
@@ -42,7 +42,18 @@ select_feature → brainstorming → spec_review → plan_write → plan_review
 | `pr_open` | Run pytest/ruff/mypy; `finishing-a-development-branch` option 2 (push + PR); set `pr_url`; go to `ci_watch` |
 | `ci_watch` | Report `gh pr checks`; fix CI in scope (autopilot-style) up to `max_attempts.ci_fix`; when green + mergeable → `awaiting_merge` and **ask user to merge** |
 | `awaiting_merge` | Wait until user confirms merge; then `done` |
-| `done` | Mark backlog item `done`; reset `pipeline-state.json` to `select_feature`; summarize |
+| `done` | Mark backlog item `status: done` with `merged_at`, `merge_commit`, `pr_url`; reset `pipeline-state.json` to `select_feature` with `implementing: null`; summarize |
+
+Example backlog update on `done`:
+
+```json
+{
+  "status": "done",
+  "merged_at": "2026-09-08T12:00:00Z",
+  "merge_commit": "<full-sha>",
+  "pr_url": "https://github.com/EngramMesh/EngramMesh/pull/N"
+}
+```
 
 ## Implementing hard gates (CRITICAL)
 
@@ -90,9 +101,9 @@ Run this self-check before setting `phase: branch_review`:
 
 ```bash
 # Example: plan has 7 tasks
-grep -c '^### Task ' "$PLAN_PATH"
-grep -c '^Task [0-9]+: complete' .superpowers/sdd/progress.md
-# counts MUST match
+grep -cE '^### Task ' "$PLAN_PATH"
+grep -cE '^Task [0-9]+: complete \(commits ' .superpowers/sdd/progress.md
+# counts MUST match; progress lines must not include qualifiers like "review NOT run"
 ```
 
 If counts differ → **stay in `implementing`**, resume at `next_task`.
@@ -107,9 +118,27 @@ If counts differ → **stay in `implementing`**, resume at `next_task`.
 
 ## Feature selection (deterministic)
 
-1. Filter `backlog.items` where `status == "pending"` and every `depends_on` id has `status == "done"`.
-2. Sort by `priority` (P0 > P1 > P2), then `roadmap_phase`, then `id`.
+1. Filter `backlog.items` where `status == "pending"` and every `depends_on` id has `status == "done"`. Skip items with `status == "blocked"`.
+2. Sort by `priority` (P0 > P1 > P2), then `sequence` (lower first), then `roadmap_phase`, then `id`.
 3. Take the first item. If none, set `phase: blocked` and stop with "backlog empty".
+4. Log selection rationale: `roadmap_ref`, `depends_on` satisfaction, and `spec_hint` one-liner.
+
+### Acceptance criteria
+
+Merge `backlog.acceptance_defaults` with the selected item's `acceptance` array (if present). Run all commands before `pr_open`.
+
+### Backlog item fields
+
+| Field | Purpose |
+|-------|---------|
+| `id` | Stable slug; referenced by `depends_on` |
+| `sequence` | Tie-break order within same priority |
+| `roadmap_ref` | Link to design follow-up (⑤⑥⑦⑧⑨) or ROADMAP-2 |
+| `spec_hint` | PM input for brainstorming (no user Q&A) |
+| `non_goals` | Scope fence for spec/plan reviewers |
+| `depends_on` | Must all be `done` before selectable |
+| `requires_rfc` | When true, brainstorming must create `docs/rfcs/YYYY-MM-DD-<id>.md` |
+| `blocked_reason` | Human-readable; item is not auto-selected while `status: blocked` |
 
 ## Subagent rules
 

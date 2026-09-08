@@ -11,6 +11,7 @@ from engrammesh.modules.memory.domain.episode_cursor import decode_episode_curso
 from engrammesh.modules.memory.domain.errors import EpisodeIdempotencyConflict
 from engrammesh.modules.memory.domain.model import Claim, Episode, MemoryScope
 from engrammesh.modules.memory.ports import (
+    AddProposalResult,
     AppendResult,
     ClaimProposal,
     ClaimStore,
@@ -149,7 +150,7 @@ class _UnavailableClaimStore:
     def __init__(self, state: _TransactionState) -> None:
         self._state = state
 
-    async def add_proposal(self, proposal: ClaimProposal) -> None:
+    async def add_proposal(self, proposal: ClaimProposal) -> AddProposalResult:
         self._state.require_usable()
         raise NotImplementedError(_CLAIMS_UNAVAILABLE)
 

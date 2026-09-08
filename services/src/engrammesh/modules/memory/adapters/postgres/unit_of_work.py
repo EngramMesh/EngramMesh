@@ -26,6 +26,7 @@ from engrammesh.modules.memory.domain.episode_cursor import decode_episode_curso
 from engrammesh.modules.memory.domain.errors import EpisodeIdempotencyConflict
 from engrammesh.modules.memory.domain.model import Claim, Episode, MemoryScope
 from engrammesh.modules.memory.ports import (
+    AddProposalResult,
     AppendResult,
     ClaimProposal,
     ClaimStore,
@@ -41,6 +42,7 @@ _NOT_ACTIVE = "memory transaction is not active"
 _ALREADY_ENTERED = "memory transaction cannot be entered more than once"
 _ALREADY_COMMITTED = "memory transaction has already been committed"
 _CLAIMS_UNAVAILABLE = "in-memory claim store is unavailable"
+_CLAIM_PROPOSED = "memory.claim-proposed"
 _EPISODE_RECORDED = "memory.episode-recorded"
 _EVENT_AGGREGATE_UNKNOWN = "outbox episode event aggregate is unknown"
 _EVENT_TENANT_MISMATCH = "outbox event tenant does not match episode tenant"
@@ -334,18 +336,51 @@ class _PostgresClaimStore:
     def __init__(self, state: _PostgresTransactionState) -> None:
         self._state = state
 
-    async def add_proposal(self, proposal: ClaimProposal) -> None:
+    async def add_proposal(self, proposal: ClaimProposal) -> AddProposalResult:
         self._state.require_usable()
         claim = proposal.claim
         episode_id = claim.evidence[0].episode_id
+        extractor_version = claim.evidence[0].extractor_version
         row = claim_to_row(claim, episode_id=episode_id)
-        await self._state.connection.execute(
-            f"""
-            INSERT INTO memory_claim_proposals ({", ".join(_CLAIM_COLUMNS)})
-            VALUES ({", ".join(f"%({column})s" for column in _CLAIM_COLUMNS)})
-            ON CONFLICT (tenant_id, episode_id, extractor_version) DO NOTHING
-            """,
-            {**row, "evidence": Jsonb(row["evidence"])},
+        connection = self._state.connection
+        async with connection.cursor(row_factory=dict_row) as cursor:
+            await cursor.execute(
+                f"""
+                INSERT INTO memory_claim_proposals ({", ".join(_CLAIM_COLUMNS)})
+                VALUES ({", ".join(f"%({column})s" for column in _CLAIM_COLUMNS)})
+                ON CONFLICT (tenant_id, episode_id, extractor_version) DO NOTHING
+                RETURNING claim_id
+                """,
+                {**row, "evidence": Jsonb(row["evidence"])},
+            )
+            inserted = await cursor.fetchone()
+        if inserted is not None:
+            return AddProposalResult(
+                claim_id=MemoryId(inserted["claim_id"]),
+                created=True,
+            )
+        async with connection.cursor(row_factory=dict_row) as cursor:
+            await cursor.execute(
+                """
+                SELECT claim_id
+                FROM memory_claim_proposals
+                WHERE tenant_id = %(tenant_id)s
+                  AND episode_id = %(episode_id)s
+                  AND extractor_version = %(extractor_version)s
+                """,
+                {
+                    "tenant_id": claim.scope.tenant_id.value,
+                    "episode_id": episode_id.value,
+                    "extractor_version": extractor_version,
+                },
+            )
+            existing = await cursor.fetchone()
+        if existing is None:
+            msg = "claim proposal conflict without a stored row"
+            raise RuntimeError(msg)
+        return AddProposalResult(
+            claim_id=MemoryId(existing["claim_id"]),
+            created=False,
         )
 
     async def current(self, query: MemoryQuery) -> tuple[Claim, ...]:
@@ -414,7 +449,7 @@ class _UnavailableClaimStore:
     def __init__(self, state: _PostgresTransactionState) -> None:
         self._state = state
 
-    async def add_proposal(self, proposal: ClaimProposal) -> None:
+    async def add_proposal(self, proposal: ClaimProposal) -> AddProposalResult:
         self._state.require_usable()
         del proposal
         raise NotImplementedError(_CLAIMS_UNAVAILABLE)
@@ -450,6 +485,23 @@ class _PostgresOutboxPort:
                     SELECT tenant_id
                     FROM memory_episodes
                     WHERE episode_id = %(aggregate_id)s
+                    """,
+                    {"aggregate_id": event.aggregate_id.value},
+                )
+                tenants = await cursor.fetchall()
+            if not tenants:
+                raise ValueError(_EVENT_AGGREGATE_UNKNOWN)
+            if not any(
+                row["tenant_id"] == event.tenant_id.value for row in tenants
+            ):
+                raise ValueError(_EVENT_TENANT_MISMATCH)
+        elif event.event_type == _CLAIM_PROPOSED:
+            async with self._state.connection.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(
+                    """
+                    SELECT tenant_id
+                    FROM memory_claim_proposals
+                    WHERE claim_id = %(aggregate_id)s
                     """,
                     {"aggregate_id": event.aggregate_id.value},
                 )

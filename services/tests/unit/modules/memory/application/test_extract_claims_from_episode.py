@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Self
 from uuid import UUID
 
@@ -11,10 +13,12 @@ import pytest
 
 from engrammesh.modules.memory.application.extract_claims_from_episode import (
     ExtractClaimsFromEpisodeHandler,
+    claim_proposed_payload,
     scope_from_episode_recorded_event,
 )
 from engrammesh.modules.memory.domain.model import Episode, MemoryScope
 from engrammesh.modules.memory.ports import (
+    AddProposalResult,
     ClaimProposal,
     MemoryExtractorPort,
     MemoryIdentityPort,
@@ -96,9 +100,14 @@ def _event() -> EventEnvelope:
 @dataclass
 class FakeClaimStore:
     proposals: list[ClaimProposal] = field(default_factory=list)
+    created_on_next: bool = True
 
-    async def add_proposal(self, proposal: ClaimProposal) -> None:
+    async def add_proposal(self, proposal: ClaimProposal) -> AddProposalResult:
         self.proposals.append(proposal)
+        return AddProposalResult(
+            claim_id=proposal.claim.id,
+            created=self.created_on_next,
+        )
 
     async def current(self, query: object) -> tuple[object, ...]:
         del query
@@ -113,6 +122,7 @@ class FakeClaimStore:
 class FakeUnitOfWork:
     episode: Episode | None
     claims: FakeClaimStore = field(default_factory=FakeClaimStore)
+    outbox_events: list[EventEnvelope] = field(default_factory=list)
     committed: bool = False
 
     async def __aenter__(self) -> Self:
@@ -131,6 +141,13 @@ class FakeUnitOfWork:
         if self.episode.id == episode_id and self.episode.scope == scope:
             return self.episode
         return None
+
+    @property
+    def outbox(self) -> FakeUnitOfWork:
+        return self
+
+    async def publish(self, event: EventEnvelope) -> None:
+        self.outbox_events.append(event)
 
     async def commit(self) -> None:
         self.committed = True
@@ -185,6 +202,75 @@ async def test_handle_persists_proposals_with_assigned_ids() -> None:
     assert factory.last_unit_of_work.committed is True
     assert len(factory.last_unit_of_work.claims.proposals) == 1
     assert factory.last_unit_of_work.claims.proposals[0].claim.id == CLAIM_ID
+    assert len(factory.last_unit_of_work.outbox_events) == 1
+    published = factory.last_unit_of_work.outbox_events[0]
+    assert published.event_type == "memory.claim-proposed"
+    assert published.aggregate_id == CLAIM_ID
+    assert published.causation_id == EVENT_ID
+    assert published.correlation_id == CORRELATION_ID
+
+
+@pytest.mark.asyncio
+async def test_handle_skips_outbox_when_proposal_not_created() -> None:
+    from engrammesh.modules.memory.adapters.deterministic.extractor import (
+        DeterministicMemoryExtractor,
+    )
+
+    episode = _episode()
+    extractor = DeterministicMemoryExtractor(extractor_version="deterministic-v1")
+    proposals = await extractor.propose(episode)
+    factory = FakeUnitOfWorkFactory(episode)
+    assert factory.last_unit_of_work is None
+    unit_of_work = factory.create()
+    unit_of_work.claims.created_on_next = False
+    handler = ExtractClaimsFromEpisodeHandler(
+        unit_of_work_factory=factory,
+        extractor=FakeExtractor(proposals),
+        identities=FixedIdentityPort(),
+        enabled=True,
+    )
+    await handler.handle(_event())
+    assert len(unit_of_work.outbox_events) == 0
+
+
+def test_claim_proposed_payload_matches_schema() -> None:
+    from jsonschema import Draft202012Validator, FormatChecker
+
+    from engrammesh.modules.memory.adapters.deterministic.extractor import (
+        DeterministicMemoryExtractor,
+    )
+
+    episode = _episode()
+    extractor = DeterministicMemoryExtractor(extractor_version="deterministic-v1")
+    import asyncio
+
+    proposals = asyncio.run(extractor.propose(episode))
+    claim = replace(proposals[0].claim, id=CLAIM_ID)
+    payload = claim_proposed_payload(claim, episode_id=EPISODE_ID)
+    schema_path = (
+        Path(__file__).parents[6]
+        / "packages"
+        / "contracts"
+        / "jsonschema"
+        / "memory"
+        / "v1"
+        / "claim-proposed.schema.json"
+    )
+    with schema_path.open(encoding="utf-8") as stream:
+        schema = json.load(stream)
+    event = {
+        "event_id": str(EVENT_ID),
+        "event_type": "memory.claim-proposed",
+        "schema_version": 1,
+        "tenant_id": str(TENANT_ID),
+        "aggregate_id": str(CLAIM_ID),
+        "aggregate_version": 1,
+        "correlation_id": str(CORRELATION_ID),
+        "causation_id": str(EVENT_ID),
+        "occurred_at": NOW.isoformat(),
+        "payload": payload,
+    }
+    Draft202012Validator(schema, format_checker=FormatChecker()).validate(event)
 
 
 @pytest.mark.asyncio
