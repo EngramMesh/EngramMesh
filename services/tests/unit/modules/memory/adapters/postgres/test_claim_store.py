@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+import psycopg
 import pytest
 import pytest_asyncio
 from contract.memory_adapter_contract import (
@@ -28,7 +29,9 @@ pytestmark = pytest.mark.postgres
 @pytest_asyncio.fixture
 async def unit_of_work_factory(
     postgres_dsn: str,
+    postgres_connection: psycopg.Connection,
 ) -> AsyncIterator[PostgresMemoryUnitOfWorkFactory]:
+    del postgres_connection
     database = PostgresMemoryDatabase(postgres_dsn)
     await database.open()
     try:
