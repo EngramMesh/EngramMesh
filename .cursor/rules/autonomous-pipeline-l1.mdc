@@ -17,7 +17,7 @@ All other gates use reviewer subagents — do not wait for user approval on spec
 
 ## State files (read every turn when pipeline is active)
 
-- `.superpowers/pipeline-state.json` — current `phase`, paths, attempts
+- `.superpowers/pipeline-state.json` — current `phase`, paths, attempts, **`implementing` task tracker**
 - `.superpowers/backlog.json` — feature queue; only `pending` items with satisfied `depends_on`
 - `.superpowers/sdd/progress.md` — per-task ledger during `implementing` (create if missing)
 
@@ -37,12 +37,73 @@ select_feature → brainstorming → spec_review → plan_write → plan_review
 | `spec_review` | Dispatch spec reviewer subagent (`model: inherit`). Critical/Important → fix spec, increment `attempts.spec_review`, retry (max 3). Pass → `plan_write` |
 | `plan_write` | Use writing-plans skill; save to `docs/superpowers/plans/YYYY-MM-DD-<id>.md`; self-review; go to `plan_review` |
 | `plan_review` | Dispatch plan reviewer subagent (`model: inherit`). Fix loop max 3. Pass → `implementing` |
-| `implementing` | `using-git-worktrees` + `subagent-driven-development`: one implementer + one reviewer per task, `model: inherit`, serial only; ledger in `.superpowers/sdd/progress.md`; then `branch_review` |
+| `implementing` | **See § Implementing hard gates below** — only then `branch_review` |
 | `branch_review` | Final reviewer subagent on full branch diff (`model: inherit`). Pass → `pr_open` |
 | `pr_open` | Run pytest/ruff/mypy; `finishing-a-development-branch` option 2 (push + PR); set `pr_url`; go to `ci_watch` |
 | `ci_watch` | Report `gh pr checks`; fix CI in scope (autopilot-style) up to `max_attempts.ci_fix`; when green + mergeable → `awaiting_merge` and **ask user to merge** |
 | `awaiting_merge` | Wait until user confirms merge; then `done` |
 | `done` | Mark backlog item `done`; reset `pipeline-state.json` to `select_feature`; summarize |
+
+## Implementing hard gates (CRITICAL)
+
+**Root cause to prevent:** advancing to `branch_review` / `pr_open` after only Task 1.
+
+### Entering `implementing`
+
+1. Read `plan_path` and count every `### Task N:` header → `implementing.total_tasks`.
+2. Initialize in `pipeline-state.json`:
+
+```json
+"implementing": {
+  "total_tasks": 7,
+  "next_task": 1,
+  "completed_tasks": [],
+  "task_base_commits": {}
+}
+```
+
+3. Create `.superpowers/sdd/progress.md` with one unchecked line per task: `- [ ] Task N: ...`.
+
+### Per-task loop (serial — one task at a time)
+
+For `N` from `next_task` to `total_tasks`:
+
+1. Record `task_base_commits[N]` = current `HEAD`.
+2. Extract **only** Task N from the plan (do not pass the full plan to implementer).
+3. Dispatch implementer subagent (`model: inherit`) with task brief only.
+4. Run `review-package` from `task_base_commits[N]` to `HEAD`.
+5. Dispatch task reviewer subagent (`model: inherit`) — require **both** spec compliance ✅ and quality ✅.
+6. On failure: fix subagent → re-review. Do not increment `N`.
+7. On pass:
+   - Append to `progress.md`: `Task N: complete (commits <base7>..<head7>, review clean)`
+   - Add `N` to `completed_tasks`, set `next_task = N + 1`
+
+### Exit `implementing` ONLY when ALL are true
+
+```
+len(completed_tasks) == total_tasks
+next_task == total_tasks + 1
+progress.md contains exactly total_tasks lines matching "Task N: complete"
+```
+
+Run this self-check before setting `phase: branch_review`:
+
+```bash
+# Example: plan has 7 tasks
+grep -c '^### Task ' "$PLAN_PATH"
+grep -c '^Task [0-9]+: complete' .superpowers/sdd/progress.md
+# counts MUST match
+```
+
+If counts differ → **stay in `implementing`**, resume at `next_task`.
+
+### FORBIDDEN while `phase == implementing`
+
+- `gh pr create`, `gh pr merge`, `finishing-a-development-branch`
+- Setting `phase` to `branch_review`, `pr_open`, `ci_watch`, or `awaiting_merge`
+- Declaring "implementation complete" or "all tasks done" after fewer than `total_tasks` reviewer approvals
+- Dispatching one implementer for multiple plan tasks in a single pass (unless plan has only one task)
+- Skipping task reviewer because "code looks complete"
 
 ## Feature selection (deterministic)
 
@@ -77,3 +138,12 @@ Follow .cursor/rules/autonomous-pipeline-l1.mdc.
 Do not wait for my approval except at awaiting_merge.
 Begin at current phase (or select_feature if idle).
 ```
+
+## Resume after early PR (recovery)
+
+If `phase` is `pr_open`/`ci_watch` but `implementing.completed_tasks` length < `implementing.total_tasks`:
+
+1. Do **not** merge the PR.
+2. Set `phase: implementing`, `pr_url: null`.
+3. Resume at `implementing.next_task` (re-review or implement missing tasks).
+4. Only reopen PR after implementing exit gates pass.
