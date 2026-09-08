@@ -800,6 +800,27 @@ curl -sS "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/
 
 当 `next_cursor` 非空时，在下一请求中以 `cursor` 查询参数传入，并保持相同 scope 与 `limit`。
 
+## Claim 读取 HTTP API
+
+`bootstrap/http/` 通过 `AppRuntime.get_claim_handler()` 与
+`AppRuntime.list_claims_handler()` 暴露按 scope 精确的 Claim 读取。读取 Handler
+使用 `read_claim` 授权（策略同 Episode 读取，见[授权](#授权)）。PostgreSQL 为
+E2E 路径；内存适配器返回 **503** `claims_unavailable`。
+
+查询参数与 Episode 读取一致（`subject_id`、可选 `workspace_id` / `agent_id`、
+OIDC 关闭时的 `actor_id`）。列表额外支持 `limit`（默认 `50`，最大 `100`）与
+上一页返回的 `cursor`。
+
+| 端点 | 状态码 | 响应体 |
+|------|--------|--------|
+| `GET .../claims/{claim_id}` | `200` | `ClaimResponse`（见 `claim-response.schema.json`） |
+| `GET .../claims` | `200` | `{ "items": [ /* ClaimResponse */ ], "next_cursor": "..." \| null }` |
+
+额外错误码：`claim_read_authorization_denied`（403）、`claim_not_found`（404）、
+`invalid_claim_cursor`（422）、`claims_unavailable`（503）。列表按
+`recorded_from DESC, claim_id DESC` 排序，仅返回 `recorded_to IS NULL` 的
+`proposed` 声明。
+
 ## 执行 HTTP API
 
 `bootstrap/http/` 通过 `AppRuntime.start_execution_handler()`、

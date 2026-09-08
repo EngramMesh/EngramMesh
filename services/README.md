@@ -1029,6 +1029,45 @@ curl -sS "http://127.0.0.1:8080/v1/tenants/53dad495-7915-439a-b03a-379452a1aa86/
 List pagination: when `next_cursor` is non-null, pass it as the `cursor` query
 parameter on the next request with the same scope and `limit`.
 
+## Claim read HTTP API
+
+`bootstrap/http/` exposes scope-accurate claim reads through
+`AppRuntime.get_claim_handler()` and `AppRuntime.list_claims_handler()`.
+Read handlers use `read_claim` authorization via the same strategy as episode
+reads (see [Authorization](#authorization)). PostgreSQL is the E2E path;
+in-memory adapters return **503** `claims_unavailable`.
+
+### Claim read query parameters
+
+Both claim read endpoints require the same scope query parameters as episode
+reads (`subject_id`, optional `workspace_id` / `agent_id`, and `actor_id` when
+OIDC is disabled). List additionally accepts `limit` (default `50`, max `100`)
+and optional opaque `cursor` from a prior `next_cursor`.
+
+### Claim read success responses
+
+| Endpoint | Status | Body |
+|----------|--------|------|
+| `GET .../claims/{claim_id}` | `200` | Full `ClaimResponse` (see `claim-response.schema.json`) |
+| `GET .../claims` | `200` | `{ "items": [ /* ClaimResponse */ ], "next_cursor": "..." \| null }` |
+
+`ClaimResponse` includes `claim_id`, `scope` (with `tenant_id`), `episode_id`,
+subject–predicate–object triple, bitemporal fields, `status`, `extractor_version`,
+and `evidence`.
+
+List ordering is `recorded_from DESC`, `claim_id DESC` (current proposed claims
+with `recorded_to IS NULL`).
+
+### Claim read error responses
+
+| Status | `error.code` | Condition |
+|--------|--------------|-----------|
+| `403` | `claim_read_authorization_denied` | Authorization denied (including staging/production when OIDC off) |
+| `404` | `claim_not_found` | Unknown id, wrong scope, or cross-tenant access |
+| `422` | `invalid_claim_cursor` | Malformed list cursor |
+| `503` | `claims_unavailable` | In-memory claim store (dev HTTP without PostgreSQL) |
+| `503` | `service_unavailable` | `memory_disabled` and other `ConfigurationError` cases |
+
 ## Execution HTTP API
 
 `bootstrap/http/` exposes durable execution control through
