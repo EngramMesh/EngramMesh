@@ -1,0 +1,79 @@
+---
+description: L1 semi-autonomous dev pipeline — auto select feature and execute; human starts chat and merges PR
+alwaysApply: false
+---
+
+# L1 Semi-Autonomous Pipeline
+
+Use when the user starts a feature cycle with the L1 kickoff prompt or asks to run the dev pipeline.
+
+## Human gates (L1 only)
+
+1. **Start**: User opens a chat and sends the kickoff prompt (or says "run L1 pipeline").
+2. **Merge**: After PR is green and mergeable, **stop** and ask the user to merge on GitHub. Do not `gh pr merge` unless the user explicitly requests it.
+3. **Blocked**: On `phase: blocked`, stop and report; wait for user direction.
+
+All other gates use reviewer subagents — do not wait for user approval on spec/plan design.
+
+## State files (read every turn when pipeline is active)
+
+- `.superpowers/pipeline-state.json` — current `phase`, paths, attempts
+- `.superpowers/backlog.json` — feature queue; only `pending` items with satisfied `depends_on`
+- `.superpowers/sdd/progress.md` — per-task ledger during `implementing` (create if missing)
+
+Update `pipeline-state.json` atomically when advancing `phase`.
+
+## Phase flow
+
+```
+select_feature → brainstorming → spec_review → plan_write → plan_review
+→ implementing → branch_review → pr_open → ci_watch → awaiting_merge → done
+```
+
+| Phase | Action |
+|-------|--------|
+| `select_feature` | Pick highest-priority `pending` backlog item with satisfied deps; set `feature_id`, `status: in_progress`; write one-line rationale; go to `brainstorming` |
+| `brainstorming` | Use brainstorming skill but **skip user Q&A** — infer from backlog, RFCs, ROADMAP, codebase; write spec to `docs/superpowers/specs/YYYY-MM-DD-<id>-design.md`; self-review; go to `spec_review` |
+| `spec_review` | Dispatch spec reviewer subagent (`model: inherit`). Critical/Important → fix spec, increment `attempts.spec_review`, retry (max 3). Pass → `plan_write` |
+| `plan_write` | Use writing-plans skill; save to `docs/superpowers/plans/YYYY-MM-DD-<id>.md`; self-review; go to `plan_review` |
+| `plan_review` | Dispatch plan reviewer subagent (`model: inherit`). Fix loop max 3. Pass → `implementing` |
+| `implementing` | `using-git-worktrees` + `subagent-driven-development`: one implementer + one reviewer per task, `model: inherit`, serial only; ledger in `.superpowers/sdd/progress.md`; then `branch_review` |
+| `branch_review` | Final reviewer subagent on full branch diff (`model: inherit`). Pass → `pr_open` |
+| `pr_open` | Run pytest/ruff/mypy; `finishing-a-development-branch` option 2 (push + PR); set `pr_url`; go to `ci_watch` |
+| `ci_watch` | Report `gh pr checks`; fix CI in scope (autopilot-style) up to `max_attempts.ci_fix`; when green + mergeable → `awaiting_merge` and **ask user to merge** |
+| `awaiting_merge` | Wait until user confirms merge; then `done` |
+| `done` | Mark backlog item `done`; reset `pipeline-state.json` to `select_feature`; summarize |
+
+## Feature selection (deterministic)
+
+1. Filter `backlog.items` where `status == "pending"` and every `depends_on` id has `status == "done"`.
+2. Sort by `priority` (P0 > P1 > P2), then `roadmap_phase`, then `id`.
+3. Take the first item. If none, set `phase: blocked` and stop with "backlog empty".
+
+## Subagent rules
+
+- Always set `model: inherit` on Task subagents.
+- Never dispatch parallel implementers.
+- Use `subagent-driven-development` scripts (`task-brief`, `review-package`) when available.
+
+## Verification (before PR)
+
+```bash
+uv run --python 3.14 --project services pytest services/tests -q
+uv run --python 3.14 --project services ruff check services/src services/tests
+uv run --python 3.14 --project services mypy services/src
+```
+
+## Git
+
+- Commit messages in English, Conventional Commits, `git commit -s`.
+- Do not commit unless the user asked or the active plan task step says to commit.
+
+## Kickoff prompt (user copies to start L1)
+
+```
+Run L1 pipeline from .superpowers/pipeline-state.json.
+Follow .cursor/rules/autonomous-pipeline-l1.mdc.
+Do not wait for my approval except at awaiting_merge.
+Begin at current phase (or select_feature if idle).
+```

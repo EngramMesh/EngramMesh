@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "updated_at": "2026-09-08T00:00:00Z",
+  "items": [
+    {
+      "id": "claim-extraction-processor",
+      "title": "Claim extraction processor (Phase 2 entry)",
+      "status": "pending",
+      "priority": "P0",
+      "roadmap_phase": 2,
+      "depends_on": [],
+      "rfc_refs": [
+        "docs/rfcs/2026-09-07-execution-list-api.md",
+        "docs/rfcs/2026-08-04-execution-snapshot-store.md"
+      ],
+      "spec_hint": "Consume episode-recorded / runtime events and extract claims as Phase 2 memory entry slice.",
+      "acceptance": [
+        "uv run --python 3.14 --project services pytest services/tests -q",
+        "uv run --python 3.14 --project services ruff check services/src services/tests",
+        "uv run --python 3.14 --project services mypy services/src"
+      ]
+    }
+  ]
+}

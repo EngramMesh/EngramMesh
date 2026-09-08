@@ -5,9 +5,11 @@
 __pycache__/
 *.py[cod]
 
-# Local planning and workflow artifacts
-.superpowers
-**/.superpowers
+# Local planning and workflow scratch (tracked pipeline files are whitelisted below)
+.superpowers/*
+**/.superpowers/*
+!.superpowers/backlog.json
+!.superpowers/pipeline-state.json
 docs/superpowers
 **/docs/superpowers
 docs/plans
@@ -17,5 +19,7 @@ docs/plans
 !docs/architecture/
 !docs/adr/
 !docs/rfcs/
-.cursor/
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
 reports/
