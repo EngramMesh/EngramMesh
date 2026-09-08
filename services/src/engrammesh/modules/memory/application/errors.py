@@ -21,3 +21,15 @@ class EpisodeReadAuthorizationDenied(PermissionError):
 class EpisodeNotFound(LookupError):
     def __init__(self) -> None:
         super().__init__()
+
+
+@final
+class ClaimNotFound(LookupError):
+    def __init__(self) -> None:
+        super().__init__()
+
+
+@final
+class ClaimReadAuthorizationDenied(PermissionError):
+    def __init__(self) -> None:
+        super().__init__()
